@@ -1,0 +1,158 @@
+================================================================================
+CATEGORY HIERARCHY RETRIEVAL ALGORITHM - QUICK REFERENCE
+================================================================================
+
+ALGORITHM TYPE:
+  Bottom-up tree traversal (child → root)
+
+TIME COMPLEXITY:
+  O(h) where h = height of category tree
+  
+SPACE COMPLEXITY:
+  O(h) for storing hierarchy list
+
+API CALLS:
+  1 call per category level + 1 for article
+
+================================================================================
+STEP-BY-STEP PROCESS
+================================================================================
+
+1. START
+   └─ Input: category_sys_id from article's kb_category field
+
+2. INITIALIZE
+   └─ hierarchy = []  (empty list)
+   └─ current = category_sys_id
+
+3. LOOP (while current exists)
+   │
+   ├─ FETCH: Get category from ServiceNow API
+   │   GET /api/now/table/kb_category/{current}
+   │
+   ├─ STORE: Insert category at FRONT of list
+   │   hierarchy.insert(0, category)
+   │   
+   │   Why position 0? To maintain root→child order
+   │   while traversing child→root
+   │
+   ├─ CHECK: Does category have a parent?
+   │   │
+   │   ├─ YES → Move up: current = category.parent_id
+   │   │         Continue loop
+   │   │
+   │   └─ NO  → Reached root, BREAK loop
+   │
+   └─ SAFETY: Stop if depth > 10 (prevent infinite loops)
+
+4. RETURN
+   └─ hierarchy = [root, intermediate, ..., leaf]
+
+================================================================================
+DATA STRUCTURE
+================================================================================
+
+ServiceNow Category Object:
+┌─────────────────────────────────────┐
+│ Category                            │
+├─────────────────────────────────────┤
+│ sys_id:    "abc123..."              │  ← Unique identifier
+│ label:     "IT"                     │  ← Display name
+│ parent_id: {                        │  ← Link to parent
+│   value: "xyz789..."                │     (null if root)
+│ }                                   │
+└─────────────────────────────────────┘
+
+Article → Category Relationship:
+┌──────────────┐         ┌──────────────┐
+│   Article    │         │  Category    │
+├──────────────┤         ├──────────────┤
+│ number       │         │ sys_id       │
+│ title        │         │ label        │
+│ kb_category ─┼────────→│ parent_id    │
+│   .value     │ refers  │              │
+└──────────────┘   to    └──────────────┘
+
+================================================================================
+EXAMPLE TRACE
+================================================================================
+
+Article: KB0011256
+kb_category.value = "4538b686" (イベント)
+
+Iteration 1:
+  API: GET /kb_category/4538b686
+  Result: {label: "イベント", parent_id: "a9614ac6"}
+  Action: hierarchy = [イベント]
+  Next: current = "a9614ac6"
+
+Iteration 2:
+  API: GET /kb_category/a9614ac6
+  Result: {label: "東京オフィス", parent_id: "7251c6c6"}
+  Action: hierarchy = [東京オフィス, イベント]
+  Next: current = "7251c6c6"
+
+Iteration 3:
+  API: GET /kb_category/7251c6c6
+  Result: {label: "オフィス", parent_id: "dfc19531"}
+  Action: hierarchy = [オフィス, 東京オフィス, イベント]
+  Next: current = "dfc19531"
+
+Iteration 4:
+  API: GET /kb_category/dfc19531
+  Result: 404 Not Found (knowledge base, not category)
+  Action: Stop traversal
+
+Final Result:
+  Path: オフィス > 東京オフィス > イベント
+  Depth: 3 levels
+
+================================================================================
+KEY INSIGHTS
+================================================================================
+
+1. TRAVERSAL DIRECTION
+   ✓ We traverse UP (child → root)
+   ✓ But store in reverse order (root → child)
+   ✓ This is achieved by insert(0, ...) instead of append()
+
+2. STOPPING CONDITIONS
+   • No parent_id field
+   • parent_id is null/empty
+   • API returns 404 (not a category)
+   • Max depth reached (safety)
+
+3. ERROR HANDLING
+   • Gracefully handle missing categories
+   • Stop at knowledge base level
+   • Prevent infinite loops with max_depth
+
+4. OPTIMIZATION OPPORTUNITIES
+   • Cache frequently accessed categories
+   • Batch fetch multiple categories
+   • Store full paths in database
+
+================================================================================
+VISUAL METAPHOR
+================================================================================
+
+Think of it like climbing a family tree:
+
+    🏠 Great-Grandparent (root)
+      ↑
+      │ parent_id points UP
+      │
+    👤 Grandparent
+      ↑
+      │ parent_id points UP
+      │
+    👤 Parent
+      ↑
+      │ parent_id points UP
+      │
+    📄 You (start here)
+
+We start at "You" and follow parent_id links upward until we reach
+the root (Great-Grandparent), then return the list from root to you.
+
+================================================================================
