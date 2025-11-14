@@ -30,7 +30,24 @@ class Config:
     # Export settings
     MIGRATION_OUTPUT_DIR = os.getenv('MIGRATION_OUTPUT_DIR', './migration_output')
     CREATE_ZIP_EXPORTS = os.getenv('CREATE_ZIP_EXPORTS', 'true').lower() == 'true'
-    
+
+    # Google Workspace API settings (for Google Docs export - API method, currently disabled)
+    GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', './credentials.json')
+    GOOGLE_TOKEN_FILE = os.getenv('GOOGLE_TOKEN_FILE', './token.json')
+    GOOGLE_SCOPES = [
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/documents.readonly'
+    ]
+    GOOGLE_DOCS_OUTPUT_DIR = os.getenv('GOOGLE_DOCS_OUTPUT_DIR', './google_docs_exports')
+
+    # Browser automation settings (for Google Docs export - Selenium method)
+    BROWSER_DOWNLOAD_DIR = os.getenv('BROWSER_DOWNLOAD_DIR', './google_docs_exports')
+    BROWSER_HEADLESS = os.getenv('BROWSER_HEADLESS', 'false').lower() == 'true'
+    BROWSER_TYPE = os.getenv('BROWSER_TYPE', 'chrome')  # chrome, firefox, edge
+    BROWSER_TIMEOUT = int(os.getenv('BROWSER_TIMEOUT', '30'))  # seconds
+    GOOGLE_EMAIL = os.getenv('GOOGLE_EMAIL', '')  # Optional: for auto-login
+    GOOGLE_PASSWORD = os.getenv('GOOGLE_PASSWORD', '')  # Optional: for auto-login (use with caution)
+
     @classmethod
     def validate(cls):
         """Validate required configuration settings."""

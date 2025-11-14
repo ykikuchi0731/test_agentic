@@ -6,6 +6,9 @@ from .parser import HTMLParser
 from .migrator import MigrationOrchestrator
 from .zip_exporter import ZipExporter
 from .article_list_exporter import ArticleListExporter
+from .google_docs_exporter import GoogleDocsExporter
+from .google_docs_browser_exporter import GoogleDocsBrowserExporter
+from .iframe_processor import IframeProcessor
 
 __all__ = [
     'ServiceNowClient',
@@ -13,6 +16,9 @@ __all__ = [
     'HTMLParser',
     'MigrationOrchestrator',
     'ZipExporter',
-    'ArticleListExporter'
+    'ArticleListExporter',
+    'GoogleDocsExporter',
+    'GoogleDocsBrowserExporter',
+    'IframeProcessor'
 ]
 
