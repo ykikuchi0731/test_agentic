@@ -135,22 +135,31 @@ def main():
         print("=" * 80)
         print(f"Total articles: {results['total_articles']}")
         print(f"ZIP created: {results['zip_created']}")
+
         if results["zip_path"]:
-            print(f"ZIP file: {results['zip_path']}")
+            print(f"\n📦 ZIP file: {results['zip_path']}")
+
+        if results.get("csv_path"):
+            print(f"📊 CSV report: {results['csv_path']}")
+
+        if results["zip_path"]:
             print()
             print("✅ Export complete!")
             print()
             print("Next steps:")
-            print("1. Open Notion and navigate to the page where you want to import")
-            print("2. Click '...' menu → Import")
-            print("3. Select 'HTML' as import format")
-            print(f"4. Upload the ZIP file: {results['zip_path']}")
-            print("5. Notion will automatically create pages from the HTML files")
+            print("1. Review the CSV report for export summary")
+            print("2. Open Notion and navigate to the page where you want to import")
+            print("3. Click '...' menu → Import")
+            print("4. Select 'HTML' as import format")
+            print(f"5. Upload the ZIP file: {results['zip_path']}")
+            print("6. Notion will automatically create pages from the HTML files")
 
         if results["errors"]:
-            print(f"\nErrors ({len(results['errors'])}):")
+            print(f"\n❌ Errors ({len(results['errors'])}):")
             for error in results["errors"][:10]:  # Show first 10
                 print(f"  - {error}")
+            if len(results["errors"]) > 10:
+                print(f"  ... and {len(results['errors']) - 10} more errors")
 
         # Stop browser if it was started
         if google_docs_exporter:

@@ -187,6 +187,7 @@ def main():
                 print(f"     - Iframe-only content: {summary['is_iframe_only']}")
 
                 # Process iframes if not analyze-only mode
+                process_summary = None
                 if not analyze_only:
                     print("  🔄 Processing iframes...")
 
@@ -222,13 +223,15 @@ def main():
                             results["errors"].append(f"{article_number}: {error}")
 
                 # Store report
-                article_reports.append(
-                    {
-                        "number": article_number,
-                        "title": article_title,
-                        "summary": summary,
-                    }
-                )
+                report_entry = {
+                    "number": article_number,
+                    "title": article_title,
+                    "summary": summary,
+                }
+                if process_summary:
+                    report_entry["process_summary"] = process_summary
+
+                article_reports.append(report_entry)
 
             else:
                 print("  ℹ️  No iframes found")
@@ -288,7 +291,94 @@ def main():
                 for url in summary["google_slides_urls"]:
                     print(f"    - {url}")
 
+    # Generate CSV report
+    if article_reports:
+        print("\n" + "=" * 80)
+        print("Generating CSV Report")
+        print("=" * 80)
+
+        csv_path = _create_iframe_report_csv(
+            article_reports, analyze_only, results
+        )
+        print(f"\n📊 CSV report saved to: {csv_path}")
+        print("You can open this file in Excel or Google Sheets for analysis")
+
     print("\n" + "=" * 80)
+
+
+def _create_iframe_report_csv(
+    article_reports, analyze_only, results
+):
+    """Create CSV report of iframe processing results."""
+    import csv
+    from datetime import datetime
+    from pathlib import Path
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode = "analysis" if analyze_only else "processed"
+    csv_filename = f"iframe_report_{mode}_{timestamp}.csv"
+    csv_path = Path("./migration_output") / csv_filename
+
+    # Create output directory if it doesn't exist
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Define CSV columns
+    fieldnames = [
+        "article_number",
+        "article_title",
+        "has_iframes",
+        "total_iframes",
+        "google_docs_count",
+        "google_slides_count",
+        "other_iframes_count",
+        "is_iframe_only",
+        "google_docs_urls",
+        "google_slides_urls",
+    ]
+
+    # Add processing columns if not analyze-only
+    if not analyze_only:
+        fieldnames.extend(
+            [
+                "docs_downloaded_count",
+                "slides_converted_count",
+            ]
+        )
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+
+        for report in article_reports:
+            summary = report["summary"]
+
+            row = {
+                "article_number": report["number"],
+                "article_title": report["title"],
+                "has_iframes": "Yes" if summary["total_iframes"] > 0 else "No",
+                "total_iframes": summary["total_iframes"],
+                "google_docs_count": summary["google_docs_count"],
+                "google_slides_count": summary["google_slides_count"],
+                "other_iframes_count": summary["other_iframes_count"],
+                "is_iframe_only": "Yes" if summary["is_iframe_only"] else "No",
+                "google_docs_urls": "; ".join(summary["google_docs_urls"]),
+                "google_slides_urls": "; ".join(summary["google_slides_urls"]),
+            }
+
+            # Add processing results if available
+            if not analyze_only and "process_summary" in report:
+                process_summary = report["process_summary"]
+                row["docs_downloaded_count"] = len(
+                    process_summary.get("docs_downloaded", [])
+                )
+                row["slides_converted_count"] = len(
+                    process_summary.get("slides_converted", [])
+                )
+
+            writer.writerow(row)
+
+    return str(csv_path)
 
 
 if __name__ == "__main__":

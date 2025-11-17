@@ -65,6 +65,7 @@ class MigrationOrchestrator:
             2. Get merged translations for each article
             3. Download attachments
             4. Create ZIP export with all data
+            5. Generate CSV report
         """
         logger.info("Starting ZIP export process")
 
@@ -72,7 +73,9 @@ class MigrationOrchestrator:
             "total_articles": 0,
             "zip_created": False,
             "zip_path": None,
+            "csv_path": None,
             "errors": [],
+            "articles_data": [],  # Store article data for CSV export
         }
 
         try:
@@ -80,6 +83,7 @@ class MigrationOrchestrator:
             logger.info("Fetching articles from ServiceNow")
             articles_data = self._fetch_all_articles(query)
             results["total_articles"] = len(articles_data)
+            results["articles_data"] = articles_data  # Store for CSV export
 
             if not articles_data:
                 logger.warning("No articles found")
@@ -101,6 +105,12 @@ class MigrationOrchestrator:
 
             results["zip_created"] = True
             results["zip_path"] = zip_path
+
+            # Create CSV report
+            logger.info("Generating CSV export report")
+            csv_path = self._create_export_report_csv(articles_data, zip_path)
+            results["csv_path"] = csv_path
+            logger.info(f"✅ CSV report created: {csv_path}")
 
             logger.info(f"✅ ZIP export complete: {zip_path}")
             return results
@@ -342,3 +352,109 @@ class MigrationOrchestrator:
             "output_directory": str(self.output_dir),
             "zip_directory": str(self.output_dir / "zips"),
         }
+
+    def _create_export_report_csv(
+        self, articles_data: List[Dict[str, Any]], zip_path: str
+    ) -> str:
+        """
+        Create CSV report of exported articles.
+
+        Args:
+            articles_data: List of article data dictionaries
+            zip_path: Path to the created ZIP file
+
+        Returns:
+            Path to created CSV file
+        """
+        import csv
+        from datetime import datetime
+
+        # Generate CSV filename based on ZIP filename
+        csv_filename = Path(zip_path).stem + "_report.csv"
+        csv_path = self.output_dir / csv_filename
+
+        # Define CSV columns
+        fieldnames = [
+            "article_number",
+            "article_title",
+            "sys_id",
+            "workflow_state",
+            "language",
+            "has_translations",
+            "translation_count",
+            "category_path",
+            "attachments_count",
+            "has_iframes",
+            "google_docs_downloaded",
+            "google_slides_converted",
+            "requires_special_handling",
+            "special_handling_flag",
+            "created_on",
+            "updated_on",
+            "author",
+        ]
+
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+
+            for article_data in articles_data:
+                article = article_data["article"]
+                translations = article_data.get("translations", [])
+                attachments = article_data.get("attachments", [])
+                iframe_result = article_data.get("iframe_result")
+                category_path = article_data.get("category_path", [])
+
+                # Count Google Docs downloaded
+                google_docs_count = 0
+                google_slides_count = 0
+                if iframe_result and iframe_result.get("has_iframes"):
+                    # Count from original
+                    if iframe_result["original"].get("summary"):
+                        google_docs_count += len(
+                            iframe_result["original"]["summary"].get("docs_downloaded", [])
+                        )
+                        google_slides_count += len(
+                            iframe_result["original"]["summary"].get("slides_converted", [])
+                        )
+
+                    # Count from translations
+                    for trans in iframe_result.get("translations", []):
+                        if trans.get("summary"):
+                            google_docs_count += len(
+                                trans["summary"].get("docs_downloaded", [])
+                            )
+                            google_slides_count += len(
+                                trans["summary"].get("slides_converted", [])
+                            )
+
+                row = {
+                    "article_number": article.get("number", ""),
+                    "article_title": article.get("short_description", ""),
+                    "sys_id": article.get("sys_id", ""),
+                    "workflow_state": article.get("workflow_state", ""),
+                    "language": article.get("language", ""),
+                    "has_translations": "Yes" if translations else "No",
+                    "translation_count": len(translations),
+                    "category_path": " > ".join(category_path) if category_path else "",
+                    "attachments_count": len(attachments),
+                    "has_iframes": "Yes"
+                    if (iframe_result and iframe_result.get("has_iframes"))
+                    else "No",
+                    "google_docs_downloaded": google_docs_count,
+                    "google_slides_converted": google_slides_count,
+                    "requires_special_handling": "Yes"
+                    if article_data.get("requires_special_handling")
+                    else "No",
+                    "special_handling_flag": article_data.get("special_handling_flag", ""),
+                    "created_on": article.get("sys_created_on", ""),
+                    "updated_on": article.get("sys_updated_on", ""),
+                    "author": article.get("author", {}).get("display_value", "")
+                    if isinstance(article.get("author"), dict)
+                    else article.get("author", ""),
+                }
+
+                writer.writerow(row)
+
+        logger.info(f"CSV report saved to: {csv_path}")
+        return str(csv_path)
