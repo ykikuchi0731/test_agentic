@@ -386,9 +386,33 @@ class ArticleListExporter:
 
         # Write CSV
         if csv_rows:
-            fieldnames = list(csv_rows[0].keys())
+            # Define all possible fieldnames explicitly to handle articles with and without translations
+            fieldnames = [
+                "article_number",
+                "article_title",
+                "sys_id",
+                "article_type",
+                "workflow_state",
+                "valid_to",
+                "created_on",
+                "updated_on",
+                "language",
+                "version",
+                "author",
+                "category_path",
+                "category_depth",
+                "has_translations",
+                "translation_count",
+                # Translation fields (may not exist in all rows)
+                "translation_sys_id",
+                "translation_number",
+                "translation_title",
+                "translation_language",
+                "translation_updated_on",
+            ]
+
             with open(output_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
                 writer.writeheader()
                 writer.writerows(csv_rows)
 

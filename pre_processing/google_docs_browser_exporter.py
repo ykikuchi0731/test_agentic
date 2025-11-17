@@ -101,7 +101,40 @@ class GoogleDocsBrowserExporter:
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option("useAutomationExtension", False)
 
-            service = ChromeService(ChromeDriverManager().install())
+            # Install ChromeDriver and fix Mac ARM64 path issue
+            driver_path = ChromeDriverManager().install()
+
+            # Fix for Mac ARM64: webdriver-manager returns wrong path
+            # It points to THIRD_PARTY_NOTICES instead of the actual chromedriver
+            if 'THIRD_PARTY_NOTICES' in driver_path or not os.path.isfile(driver_path):
+                logger.warning(f"ChromeDriver path seems incorrect: {driver_path}")
+
+                # Get the parent directory
+                driver_dir = os.path.dirname(driver_path)
+
+                # Try to find the actual chromedriver executable
+                possible_paths = [
+                    os.path.join(driver_dir, 'chromedriver'),
+                    os.path.join(os.path.dirname(driver_dir), 'chromedriver'),
+                ]
+
+                for possible_path in possible_paths:
+                    if os.path.isfile(possible_path) and os.access(possible_path, os.X_OK):
+                        driver_path = possible_path
+                        logger.info(f"✅ Fixed ChromeDriver path: {driver_path}")
+                        break
+                else:
+                    # Last resort: search the entire .wdm directory
+                    wdm_base = os.path.dirname(os.path.dirname(driver_dir))
+                    for root, dirs, files in os.walk(wdm_base):
+                        if 'chromedriver' in files:
+                            potential_driver = os.path.join(root, 'chromedriver')
+                            if os.access(potential_driver, os.X_OK):
+                                driver_path = potential_driver
+                                logger.info(f"✅ Found ChromeDriver: {driver_path}")
+                                break
+
+            service = ChromeService(driver_path)
             driver = webdriver.Chrome(service=service, options=options)
 
         # Firefox setup
