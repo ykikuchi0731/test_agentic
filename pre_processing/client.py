@@ -86,7 +86,7 @@ class ServiceNowClient:
                     fields: Optional[List[str]] = None,
                     limit: Optional[int] = None,
                     offset: int = 0,
-                    display_value: str = 'all') -> List[Dict]:
+                    display_value: Optional[str] = None) -> List[Dict]:
         """
         Query a ServiceNow table.
 
@@ -96,16 +96,19 @@ class ServiceNowClient:
             fields: List of fields to return
             limit: Maximum number of records to return
             offset: Number of records to skip
-            display_value: How to return reference fields ('true', 'false', 'all')
+            display_value: How to return reference fields ('true', 'false', 'all', None)
                          'all' returns both value and display_value
+                         None uses ServiceNow default (values only)
 
         Returns:
             List of records
         """
         params: Dict[str, Any] = {
-            'sysparm_offset': offset,
-            'sysparm_display_value': display_value
+            'sysparm_offset': offset
         }
+
+        if display_value is not None:
+            params['sysparm_display_value'] = display_value
 
         if query:
             params['sysparm_query'] = query

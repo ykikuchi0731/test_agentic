@@ -142,42 +142,39 @@ def cmd_export_list(args):
         # Initialize knowledge base handler
         kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
 
-        # Get all articles
-        logger.info("Fetching articles from ServiceNow...")
-        articles = kb.get_latest_articles_only()
-
-        # Apply filters
-        filters = CommonCLI.parse_filters(args.filter)
-        if filters or args.kb_base:
-            articles = CommonCLI.filter_articles(articles, filters, args.kb_base)
-            logger.info(f"Filtered to {len(articles)} articles")
-
-        # Apply limit and offset
-        articles = CommonCLI.apply_limit_offset(articles, args.limit, args.offset)
-        logger.info(f"Exporting {len(articles)} articles")
-
-        if args.dry_run:
-            print("\n[DRY RUN] Would export the following articles:")
-            CommonCLI.print_summary(
-                "Articles to Export",
-                articles,
-                ['number', 'short_description', 'kb_category']
-            )
-            return 0
-
         # Initialize exporter
         exporter = ArticleListExporter(
-            kb=kb,
+            servicenow_kb=kb,
             output_dir=args.output or Config.MIGRATION_OUTPUT_DIR
         )
 
+        # Parse filters
+        filters = CommonCLI.parse_filters(args.filter)
+        category_filter = filters.get('category') if filters else None
+
+        if args.dry_run:
+            print("\n[DRY RUN] Would export article list")
+            print(f"  Limit: {args.limit if args.limit else 'all'}")
+            print(f"  Category filter: {category_filter if category_filter else 'none'}")
+            print(f"  Format: {args.format}")
+            return 0
+
+        # Collect metadata (this handles filtering and limiting internally)
+        logger.info("Collecting article metadata...")
+        article_metadata = exporter.collect_article_metadata(
+            limit=args.limit,
+            category_filter=category_filter
+        )
+
+        logger.info(f"Exporting {len(article_metadata)} articles")
+
         # Export based on format
         if args.format == 'csv':
-            output_path = exporter.export_to_csv(articles)
+            output_path = exporter.export_to_csv(article_metadata)
         else:
-            output_path = exporter.export_to_json(articles)
+            output_path = exporter.export_to_json(article_metadata)
 
-        print(f"\n✅ Exported {len(articles)} articles to: {output_path}")
+        print(f"\n✅ Exported {len(article_metadata)} articles to: {output_path}")
         return 0
 
 
@@ -285,9 +282,9 @@ def cmd_export_categories(args):
         # Initialize knowledge base handler
         kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
 
-        # Get all articles
+        # Get all articles with display values for human-readable category names
         logger.info("Fetching articles from ServiceNow...")
-        articles = kb.get_latest_articles_only()
+        articles = kb.get_latest_articles_only(display_value='all')
         logger.info(f"Found {len(articles)} articles")
 
         # Build hierarchy

@@ -46,6 +46,7 @@ class KnowledgeBase:
         fields: Optional[List[str]] = None,
         limit: Optional[int] = None,
         offset: int = 0,
+        display_value: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         List all HTML articles in knowledge portal.
@@ -96,6 +97,7 @@ class KnowledgeBase:
                 fields=fields,
                 limit=limit,
                 offset=offset,
+                display_value=display_value,
             )
 
             logger.info(f"Retrieved {len(articles)} articles")
@@ -112,7 +114,7 @@ class KnowledgeBase:
         Get article data in HTML format by sys_id.
 
         Args:
-            sys_id: System ID of the knowledge article
+            sys_id: System ID of the knowledge article (can be string or dict with value/display_value)
             fields: List of fields to return (default: all common fields)
 
         Returns:
@@ -123,6 +125,10 @@ class KnowledgeBase:
             html_content = article['text']
             title = article['short_description']
         """
+        # Handle sys_id as dict (when sysparm_display_value=all)
+        if isinstance(sys_id, dict):
+            sys_id = sys_id.get('value', sys_id.get('display_value', ''))
+
         if fields is None:
             fields = [
                 "sys_id",
@@ -299,7 +305,8 @@ class KnowledgeBase:
         return self.parser.parse_html(html_content)
 
     def get_all_articles_paginated(
-        self, query: Optional[str] = None, page_size: int = 100
+        self, query: Optional[str] = None, page_size: int = 100,
+        display_value: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Get all articles using pagination.
@@ -316,7 +323,7 @@ class KnowledgeBase:
 
         while True:
             logger.info(f"Fetching page at offset {offset}")
-            articles = self.list_articles(query=query, limit=page_size, offset=offset)
+            articles = self.list_articles(query=query, limit=page_size, offset=offset, display_value=display_value)
 
             if not articles:
                 break
@@ -482,7 +489,8 @@ class KnowledgeBase:
         return article
 
     def get_latest_articles_only(
-        self, query: Optional[str] = None, fields: Optional[List[str]] = None
+        self, query: Optional[str] = None, fields: Optional[List[str]] = None,
+        display_value: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Get only the latest version of each article (deduplicates by article number).
@@ -531,7 +539,7 @@ class KnowledgeBase:
             ]
 
         # Get all articles
-        all_articles = self.get_all_articles_paginated(query=base_query)
+        all_articles = self.get_all_articles_paginated(query=base_query, display_value=display_value)
 
         # Deduplicate: keep only the latest version of each article number
         latest_articles = {}
@@ -734,7 +742,14 @@ class KnowledgeBase:
             )
 
             # Build lookup dictionary
-            self._category_tree = {cat["sys_id"]: cat for cat in all_categories}
+            # Handle sys_id as dict (when sysparm_display_value=all)
+            self._category_tree = {}
+            for cat in all_categories:
+                sys_id = cat["sys_id"]
+                if isinstance(sys_id, dict):
+                    sys_id = sys_id.get('value', sys_id.get('display_value', ''))
+                if sys_id:
+                    self._category_tree[sys_id] = cat
 
             logger.info(f"Pre-fetched {len(all_categories)} categories")
             return len(all_categories)
