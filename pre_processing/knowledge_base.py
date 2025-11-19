@@ -537,6 +537,11 @@ class KnowledgeBase:
         latest_articles = {}
         for article in all_articles:
             number = article.get("number")
+
+            # Handle if number is returned as dict (when sysparm_display_value=all)
+            if isinstance(number, dict):
+                number = number.get('value', number.get('display_value', ''))
+
             if number:
                 # Keep first occurrence (already sorted by sys_updated_on DESC)
                 if number not in latest_articles:

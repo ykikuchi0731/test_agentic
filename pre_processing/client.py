@@ -82,36 +82,40 @@ class ServiceNowClient:
             logger.error(f"Error downloading attachment {sys_id}: {e}")
             raise
     
-    def query_table(self, table: str, query: Optional[str] = None, 
-                    fields: Optional[List[str]] = None, 
+    def query_table(self, table: str, query: Optional[str] = None,
+                    fields: Optional[List[str]] = None,
                     limit: Optional[int] = None,
-                    offset: int = 0) -> List[Dict]:
+                    offset: int = 0,
+                    display_value: str = 'all') -> List[Dict]:
         """
         Query a ServiceNow table.
-        
+
         Args:
             table: Table name (e.g., 'kb_knowledge')
             query: Encoded query string
             fields: List of fields to return
             limit: Maximum number of records to return
             offset: Number of records to skip
-            
+            display_value: How to return reference fields ('true', 'false', 'all')
+                         'all' returns both value and display_value
+
         Returns:
             List of records
         """
         params: Dict[str, Any] = {
-            'sysparm_offset': offset
+            'sysparm_offset': offset,
+            'sysparm_display_value': display_value
         }
-        
+
         if query:
             params['sysparm_query'] = query
-        
+
         if fields:
             params['sysparm_fields'] = ','.join(fields)
-        
+
         if limit:
             params['sysparm_limit'] = limit
-        
+
         endpoint = f"table/{table}"
         response = self.get(endpoint, params=params)
         return response.get('result', [])

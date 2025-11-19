@@ -78,34 +78,110 @@ cp env.example .env
 # Edit .env with your credentials
 ```
 
-Or set environment variables:
+### 3. Run Migration
+
+**Using CLI (Recommended):**
 
 ```bash
-export SERVICENOW_INSTANCE="your-instance.service-now.com"
-export SERVICENOW_USERNAME="your-username"
-export SERVICENOW_PASSWORD="your-password"
+# Quick test with 5 articles
+python cli.py migrate --limit 5
+
+# Full migration
+python cli.py migrate
+
+# With filters
+python cli.py migrate --filter "category:IT" --limit 100
+
+# See all options
+python cli.py --help
 ```
 
-### 3. Run Examples
+**Using examples:**
 
 ```bash
-# Basic usage - list 10 articles
-python examples/main.py
+# Quick start example (5 articles)
+python examples/quick_start.py
 
-# Test category hierarchy
-python tests/test_category_hierarchy.py
-
-# See performance optimization
-python tests/test_optimization.py
-
-# Test version filtering and translation merging
-python tests/test_version_and_translation.py
-
-# Create ZIP export for Notion import
-python examples/migration_example.py
+# Full migration with interactive prompts
+python examples/full_migration.py
 ```
 
-## Usage Examples
+**See [CLI Reference](docs/cli_reference.md) for complete command documentation.**
+
+## CLI Commands
+
+The migration tool provides a unified CLI interface for all operations:
+
+### Main Commands
+
+```bash
+# Migrate articles (export as ZIP for Notion import)
+python cli.py migrate [--limit N] [--filter "key:value"] [--process-iframes]
+
+# Export article list (metadata only, CSV/JSON)
+python cli.py export-list [--format csv] [--output path]
+
+# Export category hierarchy (JSON/CSV)
+python cli.py export-categories [--format csv] [--output path]
+
+# Make Notion page a sub-item (post-processing)
+python cli.py make-subitem --child <id> --parent <id>
+
+# Visualize category hierarchy
+python cli.py visualize
+```
+
+### Common Options
+
+All commands support these options:
+
+- `--limit N` - Process only N items (for testing)
+- `--offset N` - Skip first N items
+- `--filter "key:value"` - Filter by criteria (category, number, etc.)
+- `--dry-run` - Show what would be done without executing
+- `-v, --verbose` - Enable debug logging
+- `-q, --quiet` - Minimal output
+
+### Examples
+
+```bash
+# Test with 5 articles
+python cli.py migrate --limit 5
+
+# Migrate IT category only
+python cli.py migrate --filter "category:IT"
+
+# Export article list as CSV
+python cli.py export-list --format csv --output articles.csv
+
+# Export category hierarchy as JSON
+python cli.py export-categories
+
+# Export category hierarchy as CSV
+python cli.py export-categories --format csv --output categories.csv
+
+# Dry run to preview
+python cli.py migrate --filter "category:HR" --dry-run
+
+# Full migration with iframe processing
+python cli.py migrate --process-iframes
+```
+
+### Module Direct Execution
+
+You can also run modules directly:
+
+```bash
+# Run pre-processing (migration)
+python -m pre_processing --limit 10 --dry-run
+
+# Run post-processing
+python -m post_processing make-subitem --child <id> --parent <id>
+```
+
+For complete CLI documentation, see [CLI Reference](docs/cli_reference.md).
+
+## Usage Examples (Python API)
 
 ### Basic: List Articles
 
