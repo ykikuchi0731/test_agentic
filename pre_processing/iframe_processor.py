@@ -139,7 +139,7 @@ class IframeProcessor:
             return False
 
     def process_google_docs_iframe(
-        self, iframe_info: Dict[str, Any], article_title: str = "document", language_suffix: str = ""
+        self, iframe_info: Dict[str, Any], article_title: str = "document", language_suffix: str = "", article_number: str = ""
     ) -> Dict[str, Any]:
         """
         Process Google Docs iframe: download as DOCX and prepare for removal.
@@ -148,6 +148,7 @@ class IframeProcessor:
             iframe_info: Iframe information dictionary from detect_iframes()
             article_title: Article title for naming downloaded file
             language_suffix: Optional language suffix (e.g., '_ja', '_en') for translations
+            article_number: Optional article number for filename prefix (e.g., 'KB0001')
 
         Returns:
             Processing result:
@@ -183,11 +184,19 @@ class IframeProcessor:
             # Sanitize article title for filename
             safe_filename = self._sanitize_filename(article_title)
 
-            # Add language suffix if provided
-            if language_suffix:
-                filename = f"{safe_filename}{language_suffix}.docx"
+            # Build filename with article number prefix if provided (matching HTML export pattern)
+            if article_number:
+                safe_number = self._sanitize_filename(article_number)
+                if language_suffix:
+                    filename = f"{safe_number}-{safe_filename}{language_suffix}.docx"
+                else:
+                    filename = f"{safe_number}-{safe_filename}.docx"
             else:
-                filename = f"{safe_filename}.docx"
+                # Fallback to old pattern if no article number provided
+                if language_suffix:
+                    filename = f"{safe_filename}{language_suffix}.docx"
+                else:
+                    filename = f"{safe_filename}.docx"
 
             logger.info(
                 f"Downloading Google Doc: {iframe_info['file_id']} as {filename}"
@@ -279,6 +288,7 @@ class IframeProcessor:
         article_title: str = "document",
         download_docs: bool = True,
         convert_slides: bool = True,
+        article_number: str = "",
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Process all Google Docs and Slides iframes in HTML content.
@@ -288,6 +298,7 @@ class IframeProcessor:
             article_title: Article title for naming downloaded files
             download_docs: Whether to download Google Docs as DOCX
             convert_slides: Whether to convert Google Slides iframes to links
+            article_number: Optional article number for filename prefix
 
         Returns:
             Tuple of (modified_html, processing_summary):
@@ -333,7 +344,9 @@ class IframeProcessor:
 
                 # Process Google Docs
                 if iframe_info["type"] == "google_docs" and download_docs:
-                    result = self.process_google_docs_iframe(iframe_info, article_title)
+                    result = self.process_google_docs_iframe(
+                        iframe_info, article_title, article_number=article_number
+                    )
 
                     if result["success"]:
                         summary["docs_downloaded"].append(result["file_path"])
@@ -401,6 +414,7 @@ class IframeProcessor:
         original_html: str,
         translations: List[Dict[str, Any]],
         article_title: str = "document",
+        article_number: str = "",
     ) -> Dict[str, Any]:
         """
         Process iframes in original article and its translations separately.
@@ -413,6 +427,7 @@ class IframeProcessor:
             original_html: HTML content of original article
             translations: List of translation dictionaries with 'text' and 'language' keys
             article_title: Article title for naming downloaded files
+            article_number: Optional article number for filename prefix
 
         Returns:
             Processing result:
@@ -470,6 +485,7 @@ class IframeProcessor:
                 article_title=article_title,
                 download_docs=True,
                 convert_slides=True,
+                article_number=article_number,
             )
 
             result["original"]["html"] = processed_html
@@ -500,6 +516,7 @@ class IframeProcessor:
                         html_content=trans_html,
                         article_title=article_title,
                         language_suffix=language_suffix,
+                        article_number=article_number,
                     )
 
                     result["translations"].append({
@@ -537,6 +554,7 @@ class IframeProcessor:
         html_content: str,
         article_title: str,
         language_suffix: str,
+        article_number: str = "",
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Process iframes in translated content with language-specific filenames.
@@ -545,6 +563,7 @@ class IframeProcessor:
             html_content: HTML content to process
             article_title: Article title for naming
             language_suffix: Language suffix for filenames (e.g., '_ja')
+            article_number: Optional article number for filename prefix
 
         Returns:
             Tuple of (modified_html, processing_summary)
@@ -577,7 +596,10 @@ class IframeProcessor:
                 # Process Google Docs with language suffix
                 if iframe_info["type"] == "google_docs":
                     result = self.process_google_docs_iframe(
-                        iframe_info, article_title, language_suffix=language_suffix
+                        iframe_info,
+                        article_title,
+                        language_suffix=language_suffix,
+                        article_number=article_number,
                     )
 
                     if result["success"]:

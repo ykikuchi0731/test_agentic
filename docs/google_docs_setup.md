@@ -97,6 +97,31 @@ python examples/export_google_doc_browser.py
 
 ---
 
+## File Naming Convention
+
+When Google Docs are exported as part of the migration process, they follow the same naming pattern as HTML exports:
+
+- **HTML exports**: `ARTICLE_NUMBER-ARTICLE_NAME.html`
+- **Google Docs exports**: `ARTICLE_NUMBER-ARTICLE_NAME.docx`
+- **Translated Google Docs**: `ARTICLE_NUMBER-ARTICLE_NAME_LANGUAGE.docx`
+
+### Examples:
+
+```
+KB0001-Getting_Started.html          ← HTML export
+KB0001-Getting_Started.docx          ← Google Doc embedded in KB0001
+KB0001-Getting_Started_ja.docx       ← Japanese translation of Google Doc
+KB0001-Getting_Started_en.docx       ← English translation of Google Doc
+```
+
+This consistent naming makes it easy to:
+- Identify which article a Google Doc belongs to
+- Match Google Docs with their corresponding HTML files
+- Organize files by article number
+- Distinguish between different language versions
+
+---
+
 ## Usage Examples
 
 ### Basic Usage:

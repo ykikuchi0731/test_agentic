@@ -197,6 +197,7 @@ def main():
                             article_title=article_title,
                             download_docs=True,
                             convert_slides=True,
+                            article_number=article_number,
                         )
                     )
 

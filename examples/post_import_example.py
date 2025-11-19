@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import json
 import logging
 
+from config import Config, ConfigurationError
 from post_processing.post_import import NotionPostImport
 
 # Setup logging
@@ -49,13 +50,25 @@ def main():
     print("=" * 80)
     print("Notion Post-Import Organization")
     print("=" * 80)
+    print()
 
     # =========================================================================
-    # CONFIGURATION - Update these values
+    # CONFIGURATION - Validate configuration from .env file
     # =========================================================================
 
-    NOTION_API_KEY = "secret_your_api_key_here"
-    DATA_SOURCE_ID = "your_database_id_here"  # Database data_source_id (same as database_id)
+    # Validate Notion configuration
+    try:
+        Config.validate_notion()
+    except ConfigurationError as e:
+        print("❌ Configuration Error")
+        print()
+        print(str(e))
+        print()
+        return
+
+    # Get API key and database ID from Config
+    NOTION_API_KEY = Config.NOTION_API_KEY
+    DATA_SOURCE_ID = Config.NOTION_DATABASE_ID  # Database data_source_id (same as database_id)
 
     # Example: Imported article pages (you'll need to provide these)
     # After importing ZIP to Notion, collect the page IDs and titles
@@ -91,16 +104,13 @@ def main():
     # EXECUTION
     # =========================================================================
 
-    if NOTION_API_KEY == "secret_your_api_key_here":
-        print("\n⚠️  Please update NOTION_API_KEY in the script!")
-        print("Get your API key from: https://www.notion.so/my-integrations")
-        return
-
-    if DATA_SOURCE_ID == "your_database_id_here":
-        print("\n⚠️  Please update DATA_SOURCE_ID in the script!")
+    if not DATA_SOURCE_ID:
+        print("\n⚠️  Please set NOTION_DATABASE_ID in your .env file!")
         print("Copy the database ID from your Notion database URL")
         print("Format: https://www.notion.so/{database_id}?v=...")
-        print("Note: data_source_id is typically the same as database_id")
+        print("\nAdd to .env:")
+        print("  NOTION_DATABASE_ID=your_database_id_here")
+        print()
         return
 
     if not imported_articles or imported_articles[0]["page_id"] == "page_id_1":
@@ -110,12 +120,14 @@ def main():
         print("1. Manually collect page IDs from Notion URLs")
         print("2. Use Notion API to search for imported pages")
         print("3. Create a JSON file with article data")
+        print()
         return
 
-    print(f"\nConfiguration:")
+    print("Configuration:")
     print(f"  API Key: {NOTION_API_KEY[:10]}...")
-    print(f"  Data Source ID: {DATA_SOURCE_ID}")
+    print(f"  Database ID: {DATA_SOURCE_ID}")
     print(f"  Articles to organize: {len(imported_articles)}")
+    print()
 
     response = input("\nProceed with post-import organization? (yes/no): ")
     if response.lower() != "yes":

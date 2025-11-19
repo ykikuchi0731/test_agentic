@@ -226,6 +226,7 @@ class MigrationOrchestrator:
 
         if self.process_iframes and self.iframe_processor:
             article_title = original_article.get("short_description", original_article.get("number", "document"))
+            article_number = original_article.get("number", "")
             original_html = original_article.get("text", "")
 
             logger.info(f"Processing iframes in article: {article_title}")
@@ -235,6 +236,7 @@ class MigrationOrchestrator:
                 original_html=original_html,
                 translations=translations,
                 article_title=article_title,
+                article_number=article_number,
             )
 
             if iframe_result["has_iframes"]:
