@@ -282,6 +282,63 @@ class IframeProcessor:
 
         return result
 
+    def process_other_iframe(
+        self, iframe_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process other (non-Google) iframe: convert to anchor link.
+
+        Args:
+            iframe_info: Iframe information dictionary from detect_iframes()
+
+        Returns:
+            Processing result:
+                {
+                    'success': bool,
+                    'action': str ('convert_to_link'),
+                    'link_html': str (HTML anchor tag to replace iframe),
+                    'link_url': str (iframe source URL),
+                    'error': str (error message if failed)
+                }
+        """
+        result = {
+            "success": False,
+            "action": "convert_to_link",
+            "link_html": None,
+            "link_url": None,
+            "error": None,
+        }
+
+        if iframe_info["type"] != "other":
+            result["error"] = "Not an 'other' type iframe"
+            return result
+
+        try:
+            # Get the source URL
+            iframe_url = iframe_info["src"]
+
+            if not iframe_url:
+                result["error"] = "Iframe has no src attribute"
+                return result
+
+            # Create anchor link HTML
+            link_html = (
+                f'<p><a href="{iframe_url}" target="_blank">'
+                f"View embedded content</a></p>"
+            )
+
+            result["success"] = True
+            result["link_html"] = link_html
+            result["link_url"] = iframe_url
+
+            logger.info(f"✅ Converted iframe to link: {iframe_url}")
+
+        except Exception as e:
+            result["error"] = f"Exception during conversion: {e}"
+            logger.error(f"Error processing other iframe: {e}")
+
+        return result
+
     def process_html_iframes(
         self,
         html_content: str,
@@ -308,6 +365,7 @@ class IframeProcessor:
                         'iframes_found': int,
                         'docs_downloaded': List[str] (file paths),
                         'slides_converted': List[str] (URLs),
+                        'other_converted': List[str] (URLs),
                         'errors': List[str],
                         'is_iframe_only': bool
                     }
@@ -316,6 +374,7 @@ class IframeProcessor:
             "iframes_found": 0,
             "docs_downloaded": [],
             "slides_converted": [],
+            "other_converted": [],
             "errors": [],
             "is_iframe_only": False,
         }
@@ -338,9 +397,17 @@ class IframeProcessor:
             # Parse HTML
             soup = BeautifulSoup(html_content, self.parser)
 
+            # Find all iframes in the soup (need to find them in this soup, not the detection soup)
+            soup_iframes = soup.find_all("iframe")
+
             # Process each iframe
-            for iframe_info in iframes:
-                iframe_element = iframe_info["element"]
+            for i, iframe_info in enumerate(iframes):
+                # Get corresponding iframe from current soup
+                if i < len(soup_iframes):
+                    iframe_element = soup_iframes[i]
+                else:
+                    logger.warning(f"Could not find iframe {i} in soup")
+                    continue
 
                 # Process Google Docs
                 if iframe_info["type"] == "google_docs" and download_docs:
@@ -374,6 +441,22 @@ class IframeProcessor:
                     else:
                         summary["errors"].append(
                             f"Google Slides {iframe_info['file_id']}: {result['error']}"
+                        )
+
+                # Process other iframes - convert to links
+                elif iframe_info["type"] == "other":
+                    result = self.process_other_iframe(iframe_info)
+
+                    if result["success"]:
+                        summary["other_converted"].append(result["link_url"])
+
+                        # Replace iframe with anchor link
+                        link_soup = BeautifulSoup(result["link_html"], self.parser)
+                        iframe_element.replace_with(link_soup)
+                        logger.info(f"Replaced other iframe with link: {result['link_url']}")
+                    else:
+                        summary["errors"].append(
+                            f"Other iframe {iframe_info['src']}: {result['error']}"
                         )
 
             # Return modified HTML
@@ -572,6 +655,7 @@ class IframeProcessor:
             "iframes_found": 0,
             "docs_downloaded": [],
             "slides_converted": [],
+            "other_converted": [],
             "errors": [],
             "is_iframe_only": False,
         }
@@ -590,8 +674,16 @@ class IframeProcessor:
 
             soup = BeautifulSoup(html_content, self.parser)
 
-            for iframe_info in iframes:
-                iframe_element = iframe_info["element"]
+            # Find all iframes in the soup
+            soup_iframes = soup.find_all("iframe")
+
+            for i, iframe_info in enumerate(iframes):
+                # Get corresponding iframe from current soup
+                if i < len(soup_iframes):
+                    iframe_element = soup_iframes[i]
+                else:
+                    logger.warning(f"Could not find iframe {i} in soup")
+                    continue
 
                 # Process Google Docs with language suffix
                 if iframe_info["type"] == "google_docs":
@@ -625,6 +717,19 @@ class IframeProcessor:
                             f"Google Slides {iframe_info['file_id']}: {result['error']}"
                         )
 
+                # Process other iframes
+                elif iframe_info["type"] == "other":
+                    result = self.process_other_iframe(iframe_info)
+
+                    if result["success"]:
+                        summary["other_converted"].append(result["link_url"])
+                        link_soup = BeautifulSoup(result["link_html"], self.parser)
+                        iframe_element.replace_with(link_soup)
+                    else:
+                        summary["errors"].append(
+                            f"Other iframe {iframe_info['src']}: {result['error']}"
+                        )
+
             modified_html = str(soup)
             return modified_html, summary
 
@@ -649,7 +754,8 @@ class IframeProcessor:
                     'other_iframes_count': int,
                     'is_iframe_only': bool,
                     'google_docs_urls': List[str],
-                    'google_slides_urls': List[str]
+                    'google_slides_urls': List[str],
+                    'other_urls': List[str]
                 }
         """
         iframes = self.detect_iframes(html_content)
@@ -666,4 +772,5 @@ class IframeProcessor:
             "is_iframe_only": self.is_iframe_only_content(html_content),
             "google_docs_urls": [i["src"] for i in google_docs],
             "google_slides_urls": [i["src"] for i in google_slides],
+            "other_urls": [i["src"] for i in other],
         }

@@ -640,6 +640,11 @@ class KnowledgeBase:
                 ],
             )
 
+            # If no direct translations found, check for sibling translations
+            # (articles that share the same outdated parent)
+            if not translations:
+                translations = self._find_sibling_translations(article_sys_id)
+
             logger.info(f"Found {len(translations)} translations")
             return translations
 
@@ -647,62 +652,254 @@ class KnowledgeBase:
             logger.error(f"Error fetching translations: {e}")
             return []
 
+    def _find_sibling_translations(self, article_sys_id: str) -> List[Dict[str, Any]]:
+        """
+        Find sibling translations by checking if articles share the same parent.
+
+        This handles the case where translations point to an outdated version
+        of the parent article instead of the current version.
+
+        Args:
+            article_sys_id: System ID of the article
+
+        Returns:
+            List of sibling translations (articles with same parent but different language)
+        """
+        try:
+            # Get the current article to check its parent and KB number
+            current_article = self.get_article(article_sys_id)
+            current_kb_number = current_article.get('number')
+
+            parent_ref = current_article.get('parent', {})
+            if isinstance(parent_ref, dict):
+                parent_sys_id = parent_ref.get('value')
+            else:
+                parent_sys_id = parent_ref
+
+            # Case 0: Current article has no parent - check if other articles point to ANY version of this KB number as parent
+            if not parent_sys_id:
+                logger.info(f"Article {current_kb_number} has no parent, looking for articles that reference any version of this KB number")
+
+                # Find all versions of this KB number (including outdated ones)
+                all_versions = self.client.query_table(
+                    table="kb_knowledge",
+                    query=f"number={current_kb_number}",
+                    fields=["sys_id"]
+                )
+
+                if all_versions:
+                    all_sys_ids = [v.get('sys_id') for v in all_versions]
+                    logger.info(f"Found {len(all_sys_ids)} versions of {current_kb_number}")
+
+                    # Find articles that have any of these versions as parent
+                    translations = []
+                    for sys_id in all_sys_ids:
+                        children = self.client.query_table(
+                            table="kb_knowledge",
+                            query=f"parent={sys_id}^workflow_state=published^sys_id!={article_sys_id}",
+                            fields=[
+                                "sys_id",
+                                "number",
+                                "short_description",
+                                "text",
+                                "language",
+                                "sys_updated_on",
+                            ]
+                        )
+                        if children:
+                            # Filter to only include different languages
+                            current_lang = current_article.get('language', {})
+                            if isinstance(current_lang, dict):
+                                current_lang = current_lang.get('value', '')
+
+                            for child in children:
+                                child_lang = child.get('language', {})
+                                if isinstance(child_lang, dict):
+                                    child_lang = child_lang.get('value', '')
+
+                                if child_lang != current_lang:
+                                    logger.info(f"Found child translation: {child.get('number')} ({child_lang})")
+                                    translations.append(child)
+
+                    return translations
+
+            if not parent_sys_id:
+                return []
+
+            # Get the parent article to check its KB number
+            parent_article = self.client.query_table(
+                table="kb_knowledge",
+                query=f"sys_id={parent_sys_id}",
+                fields=["number", "workflow_state", "language"]
+            )
+
+            if not parent_article:
+                return []
+
+            parent_kb_number = parent_article[0].get('number')
+            parent_state = parent_article[0].get('workflow_state')
+
+            # If parent is outdated, find the latest published version of that KB number
+            if parent_state == 'outdated':
+                logger.info(f"Parent article {parent_kb_number} is outdated, looking for latest version")
+
+                latest_parent = self.client.query_table(
+                    table="kb_knowledge",
+                    query=f"number={parent_kb_number}^workflow_state=published",
+                    fields=["sys_id", "language"]
+                )
+
+                if latest_parent:
+                    latest_parent_sys_id = latest_parent[0].get('sys_id')
+
+                    # Case 1: Current article IS the latest parent - look for siblings
+                    if latest_parent_sys_id == article_sys_id:
+                        logger.info(f"Current article is the latest version, looking for siblings")
+
+                        # Find other published articles that share the same outdated parent
+                        siblings = self.client.query_table(
+                            table="kb_knowledge",
+                            query=f"parent={parent_sys_id}^workflow_state=published^sys_id!={article_sys_id}",
+                            fields=[
+                                "sys_id",
+                                "number",
+                                "short_description",
+                                "text",
+                                "language",
+                                "sys_updated_on",
+                            ]
+                        )
+
+                        # Filter siblings to only include different languages
+                        current_lang = current_article.get('language', {})
+                        if isinstance(current_lang, dict):
+                            current_lang = current_lang.get('value', '')
+
+                        sibling_translations = []
+                        for sibling in siblings:
+                            sibling_lang = sibling.get('language', {})
+                            if isinstance(sibling_lang, dict):
+                                sibling_lang = sibling_lang.get('value', '')
+
+                            if sibling_lang != current_lang:
+                                logger.info(f"Found sibling translation: {sibling.get('number')} ({sibling_lang})")
+                                sibling_translations.append(sibling)
+
+                        return sibling_translations
+
+                    # Case 2: Current article is a sibling - return the latest parent as translation
+                    else:
+                        logger.info(f"Current article is a sibling, using latest parent as translation")
+
+                        # Get language of current article and latest parent
+                        current_lang = current_article.get('language', {})
+                        if isinstance(current_lang, dict):
+                            current_lang = current_lang.get('value', '')
+
+                        latest_parent_lang = latest_parent[0].get('language', {})
+                        if isinstance(latest_parent_lang, dict):
+                            latest_parent_lang = latest_parent_lang.get('value', '')
+
+                        # Only include if different language
+                        if current_lang != latest_parent_lang:
+                            # Fetch full latest parent article data
+                            latest_parent_full = self.client.query_table(
+                                table="kb_knowledge",
+                                query=f"sys_id={latest_parent_sys_id}",
+                                fields=[
+                                    "sys_id",
+                                    "number",
+                                    "short_description",
+                                    "text",
+                                    "language",
+                                    "sys_updated_on",
+                                ]
+                            )
+
+                            if latest_parent_full:
+                                logger.info(f"Found translation: {latest_parent_full[0].get('number')} ({latest_parent_lang})")
+                                return latest_parent_full
+
+            return []
+
+        except Exception as e:
+            logger.error(f"Error finding sibling translations: {e}")
+            return []
+
     def _merge_article_html(
         self, original: Dict[str, Any], translations: List[Dict[str, Any]]
     ) -> str:
         """
-        Merge original article and translations into single HTML.
+        Merge original article and translations into single HTML, with Japanese content first.
 
         Args:
             original: Original article data
             translations: List of translated article data
 
         Returns:
-            Merged HTML string with original and all translations
+            Merged HTML string with Japanese content first, then other languages
         """
-        # Start with original article
+        # Language code to display name mapping
+        lang_names = {
+            'ja': 'Japanese',
+            'en': 'English',
+            'zh': 'Chinese',
+            'ko': 'Korean',
+            'es': 'Spanish',
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ru': 'Russian',
+        }
+
+        # Collect all articles (original + translations) with their language
+        all_articles = []
+
+        # Add original
         original_html = original.get("text", "")
         original_lang = original.get("language", {})
         if isinstance(original_lang, dict):
-            original_lang = original_lang.get("value", "Original")
-        elif not original_lang:
-            original_lang = "Original"
+            original_lang = original_lang.get("value", "")
+        all_articles.append((original_lang, original_html))
+
+        # Add translations
+        for translation in translations:
+            lang = translation.get("language", {})
+            if isinstance(lang, dict):
+                lang = lang.get("value", "")
+            trans_html = translation.get("text", "")
+            all_articles.append((lang, trans_html))
+
+        # Sort by language: ja first, then en, then others alphabetically
+        def lang_sort_key(item):
+            lang = item[0]
+            if lang == 'ja':
+                return (0, lang)
+            elif lang == 'en':
+                return (1, lang)
+            else:
+                return (2, lang)
+
+        all_articles.sort(key=lang_sort_key)
 
         # Create merged HTML structure
         merged_parts = []
 
-        # Add original content with language section
-        merged_parts.append(
-            f'<div class="article-section" data-language="{original_lang}">'
-        )
-        merged_parts.append(
-            f'<h2 class="language-header">Original ({original_lang})</h2>'
-        )
-        merged_parts.append(original_html)
-        merged_parts.append("</div>")
-        merged_parts.append('<hr class="language-separator" />')
+        for i, (lang, html) in enumerate(all_articles):
+            lang_code = lang if lang else "unknown"
+            lang_name = lang_names.get(lang_code, lang_code.upper() if lang_code else "Unknown")
 
-        # Add each translation
-        for translation in translations:
-            lang = translation.get("language", {})
-            if isinstance(lang, dict):
-                lang = lang.get("value", "Unknown")
-            elif not lang:
-                lang = "Unknown"
-
-            trans_html = translation.get("text", "")
-
-            merged_parts.append(f'<div class="article-section" data-language="{lang}">')
+            merged_parts.append(f'<div class="article-section" data-language="{lang_code}">')
             merged_parts.append(
-                f'<h2 class="language-header">Translation ({lang})</h2>'
+                f'<h2 class="language-header">{lang_name}</h2>'
             )
-            merged_parts.append(trans_html)
+            merged_parts.append(html)
             merged_parts.append("</div>")
-            merged_parts.append('<hr class="language-separator" />')
 
-        # Remove last separator
-        if merged_parts and merged_parts[-1].startswith("<hr"):
-            merged_parts.pop()
+            # Add separator between sections (but not after the last one)
+            if i < len(all_articles) - 1:
+                merged_parts.append('<hr class="language-separator" />')
 
         merged_html = "\n".join(merged_parts)
 

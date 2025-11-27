@@ -94,33 +94,84 @@ class ZipExporter:
             ]
             zip_path = exporter.create_bulk_zip(articles_data)
         """
+        from datetime import datetime
+
         logger.info(f"Creating bulk ZIP for {len(articles_data)} articles")
-        
-        timestamp = Path().cwd().name
-        zip_path = self.output_dir / f"bulk_export_{len(articles_data)}_articles.zip"
-        
+
+        # Generate timestamp for filename and folder name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_path = self.output_dir / f"servicenow_export_{timestamp}.zip"
+
+        # Root folder name inside ZIP
+        root_folder = "(Migration用) Merportal"
+
+        # Articles folder with export timestamp
+        articles_folder = f"articles_exported_{timestamp}"
+
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             # Add each article
             for i, article_data in enumerate(articles_data, 1):
                 article = article_data['article']
                 article_number = article.get('number', f'article_{i}')
                 article_title = article.get('short_description', article_number)
-                safe_number = self._sanitize_filename(article_number)
-                safe_title = self._sanitize_filename(article_title)
+                translations = article_data.get('translations', [])
 
                 logger.info(f"Adding article {i}/{len(articles_data)}: {article_number}")
 
-                # Create HTML filename: ARTICLE_NUMBER-ARTICLE_NAME.html
-                html_filename = f"{safe_number}-{safe_title}.html"
+                # Create combined filename if there are translations
+                if translations:
+                    # Sort articles by language to ensure consistent ordering (ja before en)
+                    article_lang = article.get('language', {})
+                    if isinstance(article_lang, dict):
+                        article_lang = article_lang.get('value', '')
 
-                # HTML goes directly in articles/ folder
-                html_path = f"articles/{html_filename}"
+                    articles_by_lang = [(article_lang, article_number, article_title)]
+                    for trans in translations:
+                        trans_lang = trans.get('language', {})
+                        if isinstance(trans_lang, dict):
+                            trans_lang = trans_lang.get('value', '')
+                        trans_number = trans.get('number', '')
+                        trans_title = trans.get('short_description', trans_number)
+                        articles_by_lang.append((trans_lang, trans_number, trans_title))
 
-                # Attachments go in articles/ARTICLE_NUMBER/attachments/ folder
-                article_attachments_dir = f"articles/{safe_number}/"
+                    # Sort by language (ja before en)
+                    # Create a sort key that puts 'ja' first, then 'en', then others alphabetically
+                    def lang_sort_key(item):
+                        lang = item[0]
+                        if lang == 'ja':
+                            return (0, lang)
+                        elif lang == 'en':
+                            return (1, lang)
+                        else:
+                            return (2, lang)
+
+                    articles_by_lang.sort(key=lang_sort_key)
+
+                    # Build combined filename: KB_JP_KB_EN-TITLE_JP_TITLE_EN.html
+                    numbers = [self._sanitize_filename(num) for _, num, _ in articles_by_lang]
+                    titles = [self._sanitize_filename(title) for _, _, title in articles_by_lang]
+
+                    combined_number = "_".join(numbers)
+                    combined_title = "_".join(titles)
+
+                    html_filename = f"{combined_number}-{combined_title}.html"
+                    safe_number = combined_number  # For attachment directory
+
+                    logger.info(f"  Combined with translations: {html_filename}")
+                else:
+                    # Single article without translations
+                    safe_number = self._sanitize_filename(article_number)
+                    safe_title = self._sanitize_filename(article_title)
+                    html_filename = f"{safe_number}-{safe_title}.html"
+
+                # HTML goes in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
+                html_path = f"{root_folder}/{articles_folder}/{html_filename}"
+
+                # Attachments go in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ARTICLE_NUMBER/attachments/ folder
+                article_attachments_dir = f"{root_folder}/{articles_folder}/{safe_number}/"
 
                 # Update HTML with correct relative paths to attachments
-                # Since HTML is in articles/ and attachments are in articles/ARTICLE_NUMBER/attachments/
+                # Since HTML is in articles_exported_YYYYMMDD_HHMM/ and attachments are in articles_exported_YYYYMMDD_HHMM/ARTICLE_NUMBER/attachments/
                 # The relative path from HTML should be: ARTICLE_NUMBER/attachments/filename
                 html_content = article_data.get('html_content', '')
                 attachments = article_data.get('attachments', [])
@@ -128,10 +179,10 @@ class ZipExporter:
                     html_content, attachments, safe_number
                 )
 
-                # Add HTML file directly in articles/ folder
+                # Add HTML file in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
                 zf.writestr(html_path, updated_html)
 
-                # Add attachments in articles/ARTICLE_NUMBER/attachments/ folder
+                # Add attachments in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ARTICLE_NUMBER/attachments/ folder
                 if attachments:
                     self._add_attachments_to_zip(zf, attachments, attachment_map, article_attachments_dir)
         
@@ -250,27 +301,35 @@ class ZipExporter:
             ]
         }
     
-    def _add_attachments_to_zip(self, zf: zipfile.ZipFile, 
+    def _add_attachments_to_zip(self, zf: zipfile.ZipFile,
                                 attachments: List[Dict[str, Any]],
                                 attachment_map: Dict[str, str],
                                 base_dir: str = "") -> None:
-        """Add attachment files to ZIP."""
+        """Add attachment files to ZIP, deduplicating by filename."""
+        added_paths = set()
+
         for att in attachments:
             file_path = att.get('file_path')
             if not file_path or not os.path.exists(file_path):
                 logger.warning(f"Attachment file not found: {file_path}")
                 continue
-            
+
             # Get local path in ZIP
             sys_id = att.get('sys_id', '')
-            zip_path = attachment_map.get(sys_id, 
+            zip_path = attachment_map.get(sys_id,
                                          f"attachments/{self._sanitize_filename(att['file_name'])}")
-            
+
             # Add base directory if provided
             if base_dir:
                 zip_path = f"{base_dir}{zip_path}"
-            
+
+            # Skip if already added (deduplicate by ZIP path)
+            if zip_path in added_paths:
+                logger.debug(f"Skipping duplicate attachment: {zip_path}")
+                continue
+
             # Add file to ZIP
             zf.write(file_path, zip_path)
+            added_paths.add(zip_path)
             logger.debug(f"Added attachment: {zip_path}")
 

@@ -1,7 +1,10 @@
 """Orchestrator for ServiceNow to Notion migration via ZIP export."""
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +18,8 @@ class MigrationOrchestrator:
         output_dir: str = "./migration_output",
         google_docs_exporter=None,
         process_iframes: bool = True,
+        max_workers: int = 4,
+        rate_limit_delay: float = 0.0,
     ):
         """
         Initialize migration orchestrator.
@@ -24,11 +29,17 @@ class MigrationOrchestrator:
             output_dir: Directory for migration artifacts (ZIPs, logs, etc.)
             google_docs_exporter: Optional GoogleDocsBrowserExporter instance for iframe processing
             process_iframes: Whether to process Google Docs/Slides iframes (default: True)
+            max_workers: Maximum number of parallel workers (default: 4)
+            rate_limit_delay: Delay in seconds between API requests to avoid throttling (default: 0.0)
         """
         self.servicenow_kb = servicenow_kb
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.process_iframes = process_iframes
+        self.max_workers = max_workers
+        self.rate_limit_delay = rate_limit_delay
+        self._rate_limit_lock = Lock()
+        self._last_request_time = 0
 
         # Initialize ZIP exporter
         from .zip_exporter import ZipExporter
@@ -45,10 +56,18 @@ class MigrationOrchestrator:
             )
             logger.info("Iframe processor initialized")
 
-        logger.info("Migration orchestrator initialized (ZIP export mode)")
+        logger.info(
+            f"Migration orchestrator initialized (ZIP export mode, "
+            f"max_workers={max_workers}, rate_limit_delay={rate_limit_delay}s)"
+        )
 
     def export_all_to_zip(
-        self, query: Optional[str] = None, zip_filename: Optional[str] = None
+        self,
+        query: Optional[str] = None,
+        zip_filename: Optional[str] = None,
+        limit: Optional[int] = None,
+        category_filter: Optional[str] = None,
+        exclude_category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Export all articles to a ZIP file for Notion import.
@@ -56,16 +75,20 @@ class MigrationOrchestrator:
         Args:
             query: ServiceNow query to filter articles
             zip_filename: Optional custom filename for ZIP
+            limit: Maximum number of articles to export
+            category_filter: Include only articles under this category (partial match, case-insensitive)
+            exclude_category: Exclude articles under this category (partial match, case-insensitive)
 
         Returns:
             Export results summary
 
         Process:
             1. Fetch latest versions of articles from ServiceNow
-            2. Get merged translations for each article
-            3. Download attachments
-            4. Create ZIP export with all data
-            5. Generate CSV report
+            2. Filter by category if specified
+            3. Get merged translations for each article
+            4. Download attachments
+            5. Create ZIP export with all data
+            6. Generate CSV report
         """
         logger.info("Starting ZIP export process")
 
@@ -81,7 +104,18 @@ class MigrationOrchestrator:
         try:
             # Fetch articles with full data
             logger.info("Fetching articles from ServiceNow")
-            articles_data = self._fetch_all_articles(query)
+            articles_data = self._fetch_all_articles(
+                query,
+                limit=limit,
+                category_filter=category_filter,
+                exclude_category=exclude_category
+            )
+
+            # Deduplicate translation pairs
+            logger.info(f"Deduplicating {len(articles_data)} articles")
+            articles_data = self._deduplicate_translation_pairs(articles_data)
+            logger.info(f"After deduplication: {len(articles_data)} unique articles/pairs")
+
             results["total_articles"] = len(articles_data)
             results["articles_data"] = articles_data  # Store for CSV export
 
@@ -159,7 +193,75 @@ class MigrationOrchestrator:
             result["error"] = str(e)
             return result
 
-    def _fetch_all_articles(self, query: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _apply_rate_limit(self):
+        """Apply rate limiting to avoid API throttling."""
+        if self.rate_limit_delay <= 0:
+            return
+
+        with self._rate_limit_lock:
+            current_time = time.time()
+            time_since_last_request = current_time - self._last_request_time
+
+            if time_since_last_request < self.rate_limit_delay:
+                sleep_time = self.rate_limit_delay - time_since_last_request
+                time.sleep(sleep_time)
+
+            self._last_request_time = time.time()
+
+    def _deduplicate_translation_pairs(self, articles_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Deduplicate translation pairs to avoid exporting the same content twice.
+
+        When two articles are translations of each other (e.g., KB0010101 and KB0010544),
+        we only want to export them once with a combined filename.
+
+        Args:
+            articles_data: List of article data dictionaries
+
+        Returns:
+            Deduplicated list where translation pairs are merged into single entries
+        """
+        seen_sys_ids = set()
+        deduplicated = []
+
+        for article_data in articles_data:
+            article = article_data["article"]
+            article_sys_id = article.get("sys_id")
+
+            # Skip if we've already processed this article as part of a translation pair
+            if article_sys_id in seen_sys_ids:
+                logger.debug(f"Skipping {article.get('number')} - already processed as translation")
+                continue
+
+            # Mark this article as seen
+            seen_sys_ids.add(article_sys_id)
+
+            # Mark all translation sys_ids as seen too
+            translations = article_data.get("translations", [])
+            for trans in translations:
+                trans_sys_id = trans.get("sys_id")
+                if trans_sys_id:
+                    seen_sys_ids.add(trans_sys_id)
+
+            # Add this article data to deduplicated list
+            deduplicated.append(article_data)
+
+            if translations:
+                logger.debug(
+                    f"Keeping {article.get('number')} with {len(translations)} translation(s): "
+                    f"{[t.get('number') for t in translations]}"
+                )
+
+        logger.info(f"Deduplication: {len(articles_data)} -> {len(deduplicated)} articles")
+        return deduplicated
+
+    def _fetch_all_articles(
+        self,
+        query: Optional[str] = None,
+        limit: Optional[int] = None,
+        category_filter: Optional[str] = None,
+        exclude_category: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Fetch all articles with full data from ServiceNow."""
         logger.info("Fetching all articles from ServiceNow (latest versions only)")
 
@@ -171,25 +273,92 @@ class MigrationOrchestrator:
         articles = self.servicenow_kb.get_latest_articles_only(query=query)
         logger.info(f"Found {len(articles)} articles (latest versions)")
 
-        articles_data = []
+        # Apply category filters if specified
+        if category_filter or exclude_category:
+            filtered_articles = []
+            for article in articles:
+                article_sys_id = article["sys_id"]
+                article_with_cat = self.servicenow_kb.get_article_with_category_path(article_sys_id)
+                category_path = article_with_cat.get("category_path", [])
+                category_path_str = " > ".join([cat.get("label", "") for cat in category_path])
+
+                # Check include filter
+                if category_filter:
+                    if category_filter.lower() not in category_path_str.lower():
+                        continue
+
+                # Check exclude filter
+                if exclude_category:
+                    if exclude_category.lower() in category_path_str.lower():
+                        logger.info(f"Excluding article {article.get('number', '')} from category: {category_path_str}")
+                        continue
+
+                filtered_articles.append(article)
+
+            articles = filtered_articles
+            logger.info(f"After category filtering: {len(articles)} articles")
+
+        # Apply limit if specified
+        if limit is not None and limit > 0:
+            articles = articles[:limit]
+            logger.info(f"Limited to {len(articles)} articles")
+
         total = len(articles)
+        articles_data = []
 
-        for i, article in enumerate(articles, 1):
-            try:
-                if i % 10 == 0:
-                    logger.info(f"Progress: {i}/{total} articles processed")
+        if self.max_workers > 1:
+            # Parallel processing
+            logger.info(f"Processing {total} articles with {self.max_workers} parallel workers")
 
-                article_data = self._fetch_article_data(article["sys_id"])
-                articles_data.append(article_data)
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Submit all tasks
+                future_to_article = {
+                    executor.submit(self._fetch_article_data_with_rate_limit, article["sys_id"]): article
+                    for article in articles
+                }
 
-            except Exception as e:
-                logger.error(
-                    f"Error fetching article {article.get('number', 'unknown')}: {e}"
-                )
-                # Continue with other articles
+                # Process completed tasks
+                completed = 0
+                for future in as_completed(future_to_article):
+                    article = future_to_article[future]
+                    try:
+                        article_data = future.result()
+                        articles_data.append(article_data)
+                        completed += 1
+
+                        if completed % 10 == 0 or completed == total:
+                            logger.info(f"Progress: {completed}/{total} articles processed")
+
+                    except Exception as e:
+                        logger.error(
+                            f"Error fetching article {article.get('number', 'unknown')}: {e}"
+                        )
+                        # Continue with other articles
+        else:
+            # Sequential processing
+            logger.info(f"Processing {total} articles sequentially")
+
+            for i, article in enumerate(articles, 1):
+                try:
+                    if i % 10 == 0:
+                        logger.info(f"Progress: {i}/{total} articles processed")
+
+                    article_data = self._fetch_article_data(article["sys_id"])
+                    articles_data.append(article_data)
+
+                except Exception as e:
+                    logger.error(
+                        f"Error fetching article {article.get('number', 'unknown')}: {e}"
+                    )
+                    # Continue with other articles
 
         logger.info(f"Successfully fetched {len(articles_data)} articles with data")
         return articles_data
+
+    def _fetch_article_data_with_rate_limit(self, article_sys_id: str) -> Dict[str, Any]:
+        """Fetch article data with rate limiting applied."""
+        self._apply_rate_limit()
+        return self._fetch_article_data(article_sys_id)
 
     def _fetch_article_data(self, article_sys_id: str) -> Dict[str, Any]:
         """Fetch complete data for a single article."""
@@ -430,15 +599,58 @@ class MigrationOrchestrator:
                                 trans["summary"].get("slides_converted", [])
                             )
 
+                # Extract category labels from category path
+                category_labels = []
+                if category_path:
+                    for cat in category_path:
+                        if isinstance(cat, dict):
+                            category_labels.append(cat.get("label", ""))
+                        else:
+                            category_labels.append(str(cat))
+
+                # Create combined article number and title if there are translations
+                if translations:
+                    # Sort by language (ja before en) to match filename format
+                    article_lang = article.get("language", {})
+                    if isinstance(article_lang, dict):
+                        article_lang = article_lang.get("value", "")
+
+                    articles_by_lang = [(article_lang, article.get("number", ""), article.get("short_description", ""))]
+                    for trans in translations:
+                        trans_lang = trans.get("language", {})
+                        if isinstance(trans_lang, dict):
+                            trans_lang = trans_lang.get("value", "")
+                        articles_by_lang.append((trans_lang, trans.get("number", ""), trans.get("short_description", "")))
+
+                    # Sort by language (ja before en)
+                    def lang_sort_key(item):
+                        lang = item[0]
+                        if lang == 'ja':
+                            return (0, lang)
+                        elif lang == 'en':
+                            return (1, lang)
+                        else:
+                            return (2, lang)
+
+                    articles_by_lang.sort(key=lang_sort_key)
+
+                    combined_number = " / ".join([num for _, num, _ in articles_by_lang])
+                    combined_title = " / ".join([title for _, _, title in articles_by_lang])
+                    combined_lang = " / ".join([lang for lang, _, _ in articles_by_lang])
+                else:
+                    combined_number = article.get("number", "")
+                    combined_title = article.get("short_description", "")
+                    combined_lang = article.get("language", "")
+
                 row = {
-                    "article_number": article.get("number", ""),
-                    "article_title": article.get("short_description", ""),
+                    "article_number": combined_number,
+                    "article_title": combined_title,
                     "sys_id": article.get("sys_id", ""),
                     "workflow_state": article.get("workflow_state", ""),
-                    "language": article.get("language", ""),
+                    "language": combined_lang,
                     "has_translations": "Yes" if translations else "No",
                     "translation_count": len(translations),
-                    "category_path": " > ".join(category_path) if category_path else "",
+                    "category_path": " > ".join(category_labels) if category_labels else "",
                     "attachments_count": len(attachments),
                     "has_iframes": "Yes"
                     if (iframe_result and iframe_result.get("has_iframes"))

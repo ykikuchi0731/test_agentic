@@ -8,7 +8,7 @@ Usage:
     python cli.py <command> [options]
 
 Available commands:
-    migrate            - Run full migration (export articles to ZIP)
+    migrate            - Export articles from ServiceNow to ZIP
     export-list        - Export article list with metadata (CSV/JSON)
     export-categories  - Export category hierarchy (JSON/CSV)
     process-iframes    - Process iframes in article HTML
@@ -41,7 +41,7 @@ def cmd_migrate(args):
     from pre_processing.google_docs_browser_exporter import GoogleDocsBrowserExporter
 
     print("=" * 80)
-    print("ServiceNow to Notion Migration - Full Export")
+    print("ServiceNow Knowledge Base Export")
     print("=" * 80)
 
     # Validate configuration
@@ -96,22 +96,42 @@ def cmd_migrate(args):
         migrator = MigrationOrchestrator(
             servicenow_kb=kb,
             output_dir=Config.MIGRATION_OUTPUT_DIR,
-            google_docs_exporter=google_docs_exporter
+            google_docs_exporter=google_docs_exporter,
+            max_workers=args.workers if hasattr(args, 'workers') else 4,
+            rate_limit_delay=args.rate_limit if hasattr(args, 'rate_limit') else 0.0
         )
+
+        # Show configuration
+        print(f"Parallel workers: {args.workers}")
+        if args.rate_limit > 0:
+            print(f"Rate limit: {args.rate_limit}s delay between requests")
+
+        if args.category:
+            print(f"Including only articles under category: {args.category}")
+        if args.exclude_category:
+            print(f"Excluding articles under category: {args.exclude_category}")
 
         # Run migration
-        result = migrator.export_for_notion_import(
-            articles=articles,
-            create_zip=not args.no_zip
+        result = migrator.export_all_to_zip(
+            query=args.filter,
+            zip_filename=None,
+            limit=args.limit,
+            category_filter=args.category if hasattr(args, 'category') else None,
+            exclude_category=args.exclude_category if hasattr(args, 'exclude_category') else None
         )
 
-        if result:
-            print("\n✅ Migration completed successfully!")
-            if 'export_path' in result:
-                print(f"Export path: {result['export_path']}")
+        if result and result.get('zip_created'):
+            print("\n✅ Export completed successfully!")
+            if result.get('zip_path'):
+                print(f"Export ZIP: {result['zip_path']}")
+            if result.get('csv_path'):
+                print(f"Article list: {result['csv_path']}")
+            print(f"Total articles exported: {result.get('total_articles', 0)}")
             return 0
         else:
-            print("\n❌ Migration failed!")
+            print("\n❌ Export failed!")
+            if result.get('errors'):
+                print(f"Errors: {result['errors']}")
             return 1
 
 
@@ -502,10 +522,34 @@ def main():
     # =================================================================
     migrate_parser = subparsers.add_parser(
         'migrate',
-        help='Run full migration (export articles to ZIP)',
-        description='Export ServiceNow articles as ZIP file for Notion import'
+        help='Export articles from ServiceNow to ZIP',
+        description='Export ServiceNow Knowledge Base articles with attachments to ZIP'
     )
     CommonCLI.add_common_args(migrate_parser)
+    migrate_parser.add_argument(
+        '--category',
+        metavar='NAME',
+        help='Include only articles under this category (partial match, case-insensitive)'
+    )
+    migrate_parser.add_argument(
+        '--exclude-category',
+        metavar='NAME',
+        help='Exclude articles under this category (partial match, case-insensitive)'
+    )
+    migrate_parser.add_argument(
+        '--workers',
+        type=int,
+        default=4,
+        metavar='N',
+        help='Number of parallel workers for processing (default: 4, use 1 for sequential)'
+    )
+    migrate_parser.add_argument(
+        '--rate-limit',
+        type=float,
+        default=0.0,
+        metavar='SECONDS',
+        help='Delay in seconds between API requests to avoid throttling (default: 0.0)'
+    )
     migrate_parser.add_argument(
         '--process-iframes',
         action='store_true',
