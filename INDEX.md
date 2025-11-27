@@ -6,18 +6,19 @@ Quick reference to find what you need in the ServiceNow to Notion migration tool
 
 | File | Purpose | When to Read |
 |------|---------|--------------|
-| [QUICK_START.md](QUICK_START.md) | 5-minute setup guide | **Start here!** |
+| [docs/QUICK_START.md](docs/QUICK_START.md) | 5-minute setup guide | **Start here!** |
 | [README.md](README.md) | Complete documentation | After quick start |
-| [PROJECT_ORGANIZATION.md](PROJECT_ORGANIZATION.md) | Structure explanation | Understanding layout |
+| [docs/PROJECT_ORGANIZATION.md](docs/PROJECT_ORGANIZATION.md) | Structure explanation | Understanding layout |
 
 ## 📦 Core Code
 
 | File | What It Does | Key Classes/Functions |
 |------|--------------|----------------------|
-| [servicenow/client.py](servicenow/client.py) | ServiceNow API client | `ServiceNowClient` |
-| [servicenow/knowledge_base.py](servicenow/knowledge_base.py) | Article operations | `KnowledgeBase` |
-| [servicenow/parser.py](servicenow/parser.py) | HTML parsing | `HTMLParser` |
+| [pre_processing/client.py](pre_processing/client.py) | ServiceNow API client | `ServiceNowClient` |
+| [pre_processing/knowledge_base.py](pre_processing/knowledge_base.py) | Article operations | `KnowledgeBase` |
+| [pre_processing/parser.py](pre_processing/parser.py) | HTML parsing | `HTMLParser` |
 | [config.py](config.py) | Configuration | `Config` class |
+| [cli.py](cli.py) | CLI interface | Main commands |
 
 ## 💡 Examples
 
@@ -95,32 +96,34 @@ kb.prefetch_all_categories()  # 99% API call reduction!
 - Run: `python examples/visualize_hierarchy.py`
 
 #### Migrate to Notion
-- Start: [QUICK_START.md](QUICK_START.md) section 5
+- Start: [docs/QUICK_START.md](docs/QUICK_START.md) section 5
 - Reference: [examples/main.py](examples/main.py)
 
 ## 📖 Documentation Map
 
 ```
 Root Level (Start Here)
-├── QUICK_START.md          ← Begin here (5 min)
 ├── README.md               ← Complete guide
 ├── INDEX.md                ← You are here
-└── PROJECT_ORGANIZATION.md ← Structure details
+├── cli.py                  ← CLI commands
 
-Deep Dives
+Documentation
 └── docs/
+    ├── QUICK_START.md                  ← Begin here (5 min)
+    ├── PROJECT_ORGANIZATION.md         ← Structure details
+    ├── CLI_IMPLEMENTATION_SUMMARY.md   ← CLI features
+    ├── EXPORT_CATEGORIES_FEATURE.md    ← Category export
     ├── API_OPTIMIZATION_SUMMARY.md     ← Performance (recommended)
     ├── CATEGORY_HIERARCHY_EXPLANATION.md ← How algorithm works
-    ├── OPTIMIZATION_OPTIONS.md          ← All strategies
-    ├── OPTIMIZATION_VISUAL.txt          ← Visual diagrams
-    └── ALGORITHM_SUMMARY.txt            ← Quick reference
+    ├── OPTIMIZATION_OPTIONS.md         ← All strategies
+    └── ...                             ← Other docs
 ```
 
 ## 🎯 Common Workflows
 
 ### 1. First Time Setup
 ```
-1. Read: QUICK_START.md
+1. Read: docs/QUICK_START.md
 2. Run: pip install -r requirements.txt
 3. Edit: .env (from env.example)
 4. Test: python tests/test_list_articles.py
@@ -147,7 +150,7 @@ Deep Dives
 1. Check: config.py settings
 2. Verify: .env credentials
 3. Test: python tests/test_list_articles.py
-4. Review: servicenow/knowledge_base.py code
+4. Review: pre_processing/knowledge_base.py code
 ```
 
 ## 🛠️ Utility Scripts
@@ -169,7 +172,7 @@ Deep Dives
 ## 🎓 Learning Path
 
 ### Beginner
-1. ✅ [QUICK_START.md](QUICK_START.md)
+1. ✅ [docs/QUICK_START.md](docs/QUICK_START.md)
 2. ✅ `python examples/main.py`
 3. ✅ [README.md](README.md) - Usage Examples section
 
@@ -180,14 +183,14 @@ Deep Dives
 
 ### Advanced
 1. ✅ [docs/CATEGORY_HIERARCHY_EXPLANATION.md](docs/CATEGORY_HIERARCHY_EXPLANATION.md)
-2. ✅ Study `servicenow/knowledge_base.py` code
+2. ✅ Study `pre_processing/knowledge_base.py` code
 3. ✅ [docs/OPTIMIZATION_OPTIONS.md](docs/OPTIMIZATION_OPTIONS.md)
 
 ## 🔗 Quick Links
 
 | Need | Go To |
 |------|-------|
-| Setup in 5 min | [QUICK_START.md](QUICK_START.md) |
+| Setup in 5 min | [docs/QUICK_START.md](docs/QUICK_START.md) |
 | API reference | [README.md](README.md) - API Reference section |
 | Performance boost | [docs/API_OPTIMIZATION_SUMMARY.md](docs/API_OPTIMIZATION_SUMMARY.md) |
 | Code examples | [examples/](examples/) directory |
@@ -196,15 +199,16 @@ Deep Dives
 
 ## 📝 File Counts
 
-- **Root files**: 10
-- **Core modules**: 3 (in `servicenow/`)
-- **Examples**: 2 (in `examples/`)
-- **Tests**: 4 (in `tests/`)
-- **Documentation**: 5 (in `docs/`)
+- **Root files**: 6 (config, CLI, requirements, etc.)
+- **Pre-processing modules**: 10+ (in `pre_processing/`)
+- **Post-processing modules**: 3 (in `post_processing/`)
+- **Examples**: 4 (in `examples/`)
+- **Tests**: 7 (in `tests/`)
+- **Documentation**: 15+ (in `docs/`)
 
-**Total**: 24 files, all organized!
+**Total**: Well-organized project!
 
 ---
 
-**Need help?** Start with [QUICK_START.md](QUICK_START.md) and [README.md](README.md)!
+**Need help?** Start with [docs/QUICK_START.md](docs/QUICK_START.md) and [README.md](README.md)!
 

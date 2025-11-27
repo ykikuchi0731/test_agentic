@@ -29,7 +29,10 @@ wheels/
 # Downloaded files and outputs
 downloads/
 migration_output/
+output/
 test_exports/
+logs/
+data/
 *.csv
 
 # IDE

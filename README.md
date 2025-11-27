@@ -18,47 +18,52 @@ A Python project for migrating knowledge portal articles from ServiceNow to Noti
 ```
 test_agentic/
 ├── README.md                       # This file
-├── QUICK_START.md                  # Quick start guide
 ├── INDEX.md                        # Project index
-├── PROJECT_ORGANIZATION.md         # Organization details
-├── CHANGELOG_VERSION_TRANSLATION.md # Version/translation features changelog
-├── requirements.txt                # Python dependencies
+├── cli.py                          # Unified CLI interface
+├── cli_utils.py                    # CLI utilities
 ├── config.py                       # Configuration settings
+├── requirements.txt                # Python dependencies
 ├── env.example                     # Environment variables template
 ├── .gitignore                      # Git ignore rules
 │
 ├── pre_processing/                 # Phase 1: Extract from ServiceNow → ZIP
 │   ├── __init__.py
 │   ├── client.py                   # ServiceNow API client
-│   ├── knowledge_base.py           # Knowledge base operations (list, get, categories)
+│   ├── knowledge_base.py           # Knowledge base operations
 │   ├── parser.py                   # HTML parsing utilities
-│   ├── migrator.py                 # Migration orchestrator (ZIP export)
-│   └── zip_exporter.py             # ZIP file creation with HTML + attachments
+│   ├── migrator.py                 # Migration orchestrator
+│   ├── zip_exporter.py             # ZIP file creation
+│   └── ...                         # Other exporters and processors
 │
 ├── post_processing/                # Phase 2: Organize in Notion after import
 │   ├── __init__.py
-│   └── post_import.py              # Database organization (category hierarchy + relations)
+│   ├── post_import.py              # Database organization
+│   ├── category_organizer.py       # Category hierarchy builder
+│   └── page_hierarchy.py           # Page relationship manager
 │
 ├── examples/                       # Example scripts
-│   ├── main.py                     # Basic usage example
-│   ├── migration_example.py        # Pre-processing: ZIP export workflow
-│   ├── post_import_example.py      # Post-processing: Database organization workflow
-│   └── visualize_hierarchy.py     # Category hierarchy visualization
+│   ├── quick_start.py              # Quick start example
+│   ├── full_migration.py           # Full migration workflow
+│   └── ...                         # Other examples
 │
 ├── tests/                          # Test scripts
-│   ├── test_list_articles.py      # Test article listing
-│   ├── test_categories.py         # Test category retrieval
-│   ├── test_category_hierarchy.py # Test hierarchy traversal
-│   ├── test_optimization.py       # Performance optimization demo
-│   ├── test_version_and_translation.py  # Test version filtering & translation merging
-│   └── test_zip_export.py         # Test ZIP export functionality
+│   ├── test_list_articles.py
+│   ├── test_categories.py
+│   ├── test_optimization.py
+│   └── ...                         # Other tests
 │
-└── docs/                           # Technical documentation
-    ├── OPTIMIZATION_OPTIONS.md     # API call optimization strategies
-    ├── API_OPTIMIZATION_SUMMARY.md # Quick optimization reference
-    ├── OPTIMIZATION_VISUAL.txt     # Visual optimization comparison
-    ├── CATEGORY_HIERARCHY_EXPLANATION.md  # How hierarchy works
-    └── ALGORITHM_SUMMARY.txt       # Algorithm quick reference
+├── docs/                           # Documentation
+│   ├── QUICK_START.md              # Quick start guide
+│   ├── PROJECT_ORGANIZATION.md     # Project organization details
+│   ├── CLI_IMPLEMENTATION_SUMMARY.md
+│   ├── EXPORT_CATEGORIES_FEATURE.md
+│   ├── OPTIMIZATION_OPTIONS.md
+│   └── ...                         # Other documentation
+│
+├── output/                         # Generated files (gitignored)
+├── downloads/                      # Downloaded attachments (gitignored)
+├── migration_output/               # Migration artifacts (gitignored)
+└── logs/                           # Log files (gitignored)
 ```
 
 ## Quick Start
