@@ -12,6 +12,7 @@
   - In category_path column, 'A > B' means A is a parent category and B is a child category.
   - Analyze these category and create blank pages in Notion whose title name is the same as the category name
     - In the example above, we should create page A and page B
+    - Created page names and page_ids will be outputed in CSV after creation
   - There may be pages that have the same category name, but under another parent category. These should be treated as different category 
   - Then, based on category hierarchy data, make item-subitem relation between pages that corresponding original category hierarchy
     - In the example above, page B should be sub-item of page A
