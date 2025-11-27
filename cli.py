@@ -13,6 +13,7 @@ Available commands:
     export-categories  - Export category hierarchy (JSON/CSV)
     process-iframes    - Process iframes in article HTML
     make-subitem       - Make Notion page a sub-item of another
+    organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
 
 For help on a specific command:
@@ -86,16 +87,16 @@ def cmd_migrate(args):
             )
             return 0
 
-        # Initialize iframe processor if requested
-        iframe_processor = None
+        # Initialize Google Docs exporter if requested
+        google_docs_exporter = None
         if args.process_iframes:
-            iframe_processor = GoogleDocsBrowserExporter()
+            google_docs_exporter = GoogleDocsBrowserExporter()
 
         # Initialize migrator
         migrator = MigrationOrchestrator(
-            kb=kb,
+            servicenow_kb=kb,
             output_dir=Config.MIGRATION_OUTPUT_DIR,
-            iframe_processor=iframe_processor
+            google_docs_exporter=google_docs_exporter
         )
 
         # Run migration
@@ -249,6 +250,86 @@ def cmd_make_subitem(args):
     else:
         print(f"\n❌ Error: {result['error']}")
         return 1
+
+
+def cmd_organize_categories(args):
+    """Build category hierarchy in Notion database from article list CSV."""
+    from pathlib import Path
+    from post_processing.category_organizer import build_categories_from_csv
+
+    print("=" * 80)
+    print("Organize Categories in Notion Database")
+    print("=" * 80)
+
+    # Validate configuration
+    try:
+        Config.validate_notion()
+    except ConfigurationError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
+
+    # Check CSV file exists
+    csv_path = Path(args.csv)
+    if not csv_path.exists():
+        logger.error(f"CSV file not found: {args.csv}")
+        return 1
+
+    # Get database ID (from args or config)
+    database_id = args.database_id or Config.NOTION_DATABASE_ID
+    if not database_id:
+        logger.error("Database ID is required (use --database-id or set NOTION_DATABASE_ID in .env)")
+        return 1
+
+    logger.info(f"CSV file: {args.csv}")
+    logger.info(f"Database ID: {database_id}")
+    logger.info(f"Dry run: {args.dry_run}")
+
+    if args.dry_run:
+        print("\n[DRY RUN] Previewing category organization...")
+
+    # Build category hierarchy
+    result = build_categories_from_csv(
+        api_key=Config.NOTION_API_KEY,
+        database_id=database_id,
+        csv_path=str(csv_path),
+        dry_run=args.dry_run
+    )
+
+    # Display results
+    print("\n" + "=" * 80)
+    print("Results:")
+    print("=" * 80)
+    print(f"Success: {'✅ Yes' if result['success'] else '❌ No'}")
+    print(f"Categories created: {result['categories_created']}")
+    print(f"Relationships created: {result['relationships_created']}")
+    print(f"Errors: {len(result['errors'])}")
+
+    if result['errors']:
+        print("\nErrors encountered:")
+        for error in result['errors'][:10]:  # Show first 10 errors
+            print(f"  - {error}")
+        if len(result['errors']) > 10:
+            print(f"  ... and {len(result['errors']) - 10} more errors")
+
+    # Export category mapping if requested
+    if args.export_mapping and result['category_pages'] and not args.dry_run:
+        from post_processing.category_organizer import CategoryOrganizer
+
+        mapping_path = args.export_mapping
+        logger.info(f"Exporting category mapping to {mapping_path}")
+
+        organizer = CategoryOrganizer(
+            api_key=Config.NOTION_API_KEY,
+            database_id=database_id
+        )
+        organizer.category_pages = result['category_pages']
+        organizer.export_category_mapping(mapping_path)
+
+        print(f"\n✅ Category mapping exported to: {mapping_path}")
+
+    print("=" * 80)
+
+    return 0 if result['success'] else 1
 
 
 def cmd_export_categories(args):
@@ -536,6 +617,47 @@ def main():
         help='Minimal output (errors only)'
     )
     export_cat_parser.set_defaults(func=cmd_export_categories)
+
+    # =================================================================
+    # Organize categories command
+    # =================================================================
+    organize_parser = subparsers.add_parser(
+        'organize-categories',
+        help='Build category hierarchy in Notion database',
+        description='Create category pages and hierarchy in Notion from article list CSV'
+    )
+    organize_parser.add_argument(
+        '--csv',
+        required=True,
+        metavar='PATH',
+        help='Path to article list CSV file'
+    )
+    organize_parser.add_argument(
+        '--database-id',
+        metavar='ID',
+        help='Notion database ID (overrides NOTION_DATABASE_ID from .env)'
+    )
+    organize_parser.add_argument(
+        '--export-mapping',
+        metavar='PATH',
+        help='Export category path to page ID mapping as CSV'
+    )
+    organize_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Preview without creating pages'
+    )
+    organize_parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    organize_parser.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='Minimal output (errors only)'
+    )
+    organize_parser.set_defaults(func=cmd_organize_categories)
 
     # =================================================================
     # Visualize command
