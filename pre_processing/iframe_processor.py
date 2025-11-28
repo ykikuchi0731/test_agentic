@@ -640,23 +640,23 @@ class IframeProcessor:
             for translation in translations:
                 trans_html = translation.get("text", "")
                 trans_language = translation.get("language", "unknown")
+                trans_number = translation.get("number", "")
+                trans_title = translation.get("short_description", trans_number or article_title)
 
                 trans_iframes = self.detect_iframes(trans_html)
 
                 if trans_iframes:
                     logger.info(
-                        f"Processing {len(trans_iframes)} iframes in {trans_language} translation"
+                        f"Processing {len(trans_iframes)} iframes in {trans_language} translation ({trans_number})"
                     )
 
-                    # Add language suffix for filename differentiation
-                    language_suffix = f"_{trans_language}"
-
-                    # Process translation iframes with language suffix
+                    # Use translation's own article number and title for filename
+                    # This ensures each translation gets its own file: KB0001-Title.docx, KB0002-Title.docx, etc.
                     processed_trans_html, trans_summary = self._process_translation_iframes(
                         html_content=trans_html,
-                        article_title=article_title,
-                        language_suffix=language_suffix,
-                        article_number=article_number,
+                        article_title=trans_title,
+                        language_suffix="",  # No language suffix needed - use article number instead
+                        article_number=trans_number,
                     )
 
                     result["translations"].append({

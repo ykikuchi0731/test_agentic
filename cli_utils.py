@@ -125,6 +125,9 @@ class CommonCLI:
             verbose: Enable DEBUG level logging
             quiet: Enable ERROR level logging only
         """
+        from pathlib import Path
+        from datetime import datetime
+
         if quiet:
             level = logging.ERROR
         elif verbose:
@@ -132,10 +135,26 @@ class CommonCLI:
         else:
             level = logging.INFO
 
+        # Create logs directory
+        log_dir = Path(__file__).parent / 'logs'
+        log_dir.mkdir(exist_ok=True)
+
+        # Create log file path with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file = log_dir / f'migration_{timestamp}.log'
+
+        # Configure logging to both file and console
         logging.basicConfig(
             level=level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
         )
+
+        # Log the file location
+        logging.getLogger(__name__).info(f"Logging to: {log_file}")
 
     @staticmethod
     def apply_limit_offset(items: List[Any], limit: Optional[int] = None, offset: int = 0) -> List[Any]:

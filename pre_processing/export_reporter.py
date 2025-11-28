@@ -17,6 +17,10 @@ class ExportReporter:
         """
         Create CSV report of exported articles.
 
+        The report has one row per exported file:
+        - For normal HTML articles: 1 row (original + translations merged)
+        - For Google Docs articles: Multiple rows (1 for original, 1 per translation)
+
         Args:
             articles_data: List of article data dictionaries
             zip_path: Path to the created ZIP file
@@ -35,8 +39,18 @@ class ExportReporter:
             writer.writeheader()
 
             for article_data in articles_data:
-                row = ExportReporter._create_csv_row(article_data)
-                writer.writerow(row)
+                # Check if this article has Google Docs
+                has_google_docs = ExportReporter._has_google_docs(article_data)
+
+                if has_google_docs:
+                    # Create separate rows for original and each translation
+                    rows = ExportReporter._create_csv_rows_for_google_docs(article_data)
+                    for row in rows:
+                        writer.writerow(row)
+                else:
+                    # Create single row for merged HTML
+                    row = ExportReporter._create_csv_row(article_data)
+                    writer.writerow(row)
 
         logger.info(f"CSV report saved to: {csv_path}")
         return str(csv_path)
@@ -47,6 +61,7 @@ class ExportReporter:
         return [
             "article_number",
             "article_title",
+            "export_type",  # HTML or DOCX
             "sys_id",
             "workflow_state",
             "language",
@@ -89,6 +104,7 @@ class ExportReporter:
         return {
             "article_number": combined_number,
             "article_title": combined_title,
+            "export_type": "HTML",
             "sys_id": article.get("sys_id", ""),
             "workflow_state": article.get("workflow_state", ""),
             "language": combined_lang,
@@ -206,3 +222,100 @@ class ExportReporter:
             return (1, lang)
         else:
             return (2, lang)
+
+    @staticmethod
+    def _has_google_docs(article_data: Dict[str, Any]) -> bool:
+        """Check if article has Google Docs downloads."""
+        iframe_result = article_data.get('iframe_result')
+        if not iframe_result or not iframe_result.get('has_iframes'):
+            return False
+
+        # Check if original has downloaded docs
+        original_summary = iframe_result.get('original', {}).get('summary', {})
+        if original_summary and len(original_summary.get('docs_downloaded', [])) > 0:
+            return True
+
+        return False
+
+    @staticmethod
+    def _create_csv_rows_for_google_docs(article_data: Dict[str, Any]) -> List[Dict[str, str]]:
+        """
+        Create separate CSV rows for Google Docs articles.
+
+        Returns one row per exported DOCX file:
+        - 1 row for original article
+        - 1 row for each translation
+
+        Args:
+            article_data: Article data dictionary
+
+        Returns:
+            List of CSV row dictionaries
+        """
+        rows = []
+        article = article_data["article"]
+        translations = article_data.get("translations", [])
+        iframe_result = article_data.get("iframe_result", {})
+        category_path = article_data.get("category_path", [])
+        attachments = article_data.get("attachments", [])
+
+        category_labels = ExportReporter._extract_category_labels(category_path)
+        category_str = " > ".join(category_labels) if category_labels else ""
+
+        # Row for original article
+        original_summary = iframe_result.get('original', {}).get('summary', {})
+        original_docs_count = len(original_summary.get('docs_downloaded', [])) if original_summary else 0
+        original_slides_count = len(original_summary.get('slides_converted', [])) if original_summary else 0
+
+        rows.append({
+            "article_number": article.get("number", ""),
+            "article_title": article.get("short_description", ""),
+            "export_type": "DOCX",
+            "sys_id": article.get("sys_id", ""),
+            "workflow_state": article.get("workflow_state", ""),
+            "language": ExportReporter._extract_language(article),
+            "has_translations": "Yes" if translations else "No",
+            "translation_count": len(translations),
+            "category_path": category_str,
+            "attachments_count": len(attachments),
+            "has_iframes": "Yes",
+            "google_docs_downloaded": original_docs_count,
+            "google_slides_converted": original_slides_count,
+            "requires_special_handling": "Yes" if article_data.get("requires_special_handling") else "No",
+            "special_handling_flag": article_data.get("special_handling_flag", ""),
+            "created_on": article.get("sys_created_on", ""),
+            "updated_on": article.get("sys_updated_on", ""),
+            "author": ExportReporter._extract_author(article),
+        })
+
+        # Rows for translations
+        trans_results = iframe_result.get('translations', [])
+        for i, trans_result in enumerate(trans_results):
+            if i < len(translations):
+                trans = translations[i]
+                trans_summary = trans_result.get('summary', {})
+                trans_docs_count = len(trans_summary.get('docs_downloaded', [])) if trans_summary else 0
+                trans_slides_count = len(trans_summary.get('slides_converted', [])) if trans_summary else 0
+
+                rows.append({
+                    "article_number": trans.get("number", ""),
+                    "article_title": trans.get("short_description", ""),
+                    "export_type": "DOCX",
+                    "sys_id": trans.get("sys_id", ""),
+                    "workflow_state": trans.get("workflow_state", ""),
+                    "language": ExportReporter._extract_language(trans),
+                    "has_translations": "No",  # This is a translation itself
+                    "translation_count": 0,
+                    "category_path": category_str,
+                    "attachments_count": 0,  # Attachments are only listed with original
+                    "has_iframes": "Yes",
+                    "google_docs_downloaded": trans_docs_count,
+                    "google_slides_converted": trans_slides_count,
+                    "requires_special_handling": "No",
+                    "special_handling_flag": "",
+                    "created_on": trans.get("sys_created_on", ""),
+                    "updated_on": trans.get("sys_updated_on", ""),
+                    "author": ExportReporter._extract_author(trans),
+                })
+
+        return rows

@@ -146,30 +146,46 @@ class ZipExporter:
                     global_index = start_idx + i
                     logger.info(f"Adding article {global_index}/{total_articles}: {article_number}")
 
-                    # Generate filename (combined if translations exist)
-                    html_filename, safe_number = self._generate_filename(
-                        article, article_number, article_title, translations
-                    )
+                    # Check if article has Google Docs iframe
+                    iframe_result = article_data.get('iframe_result')
+                    has_google_docs = False
+                    if iframe_result and iframe_result.get('has_iframes'):
+                        original_summary = iframe_result.get('original', {}).get('summary', {})
+                        if original_summary and len(original_summary.get('docs_downloaded', [])) > 0:
+                            has_google_docs = True
 
-                    # HTML goes in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
-                    html_path = f"{root_folder}/{articles_folder}/{html_filename}"
+                    # For articles with Google Docs iframes, export DOCX files instead of HTML
+                    if has_google_docs:
+                        self._export_google_docs_to_zip(
+                            zf, article_data, article_number, article_title,
+                            root_folder, articles_folder, translations
+                        )
+                    else:
+                        # Normal HTML export flow
+                        # Generate filename (combined if translations exist)
+                        html_filename, safe_number = self._generate_filename(
+                            article, article_number, article_title, translations
+                        )
 
-                    # Attachments go in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
-                    article_attachments_dir = f"{root_folder}/{articles_folder}/attachments_{safe_number}/"
+                        # HTML goes in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
+                        html_path = f"{root_folder}/{articles_folder}/{html_filename}"
 
-                    # Update HTML with correct relative paths to attachments
-                    html_content = article_data.get('html_content', '')
-                    attachments = article_data.get('attachments', [])
-                    updated_html, attachment_map = self._update_html_links(
-                        html_content, attachments, f"attachments_{safe_number}"
-                    )
+                        # Attachments go in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
+                        article_attachments_dir = f"{root_folder}/{articles_folder}/attachments_{safe_number}/"
 
-                    # Add HTML file in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
-                    zf.writestr(html_path, updated_html)
+                        # Update HTML with correct relative paths to attachments
+                        html_content = article_data.get('html_content', '')
+                        attachments = article_data.get('attachments', [])
+                        updated_html, attachment_map = self._update_html_links(
+                            html_content, attachments, f"attachments_{safe_number}"
+                        )
 
-                    # Add attachments in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
-                    if attachments:
-                        self._add_attachments_to_zip(zf, attachments, attachment_map, article_attachments_dir)
+                        # Add HTML file in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
+                        zf.writestr(html_path, updated_html)
+
+                        # Add attachments in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
+                        if attachments:
+                            self._add_attachments_to_zip(zf, attachments, attachment_map, article_attachments_dir)
 
             logger.info(f"ZIP created: {zip_path}")
 
@@ -508,3 +524,87 @@ class ZipExporter:
             zf.write(file_path, zip_path)
             added_paths.add(zip_path)
             logger.debug(f"Added attachment: {zip_path}")
+
+    def _export_google_docs_to_zip(
+        self,
+        zf: zipfile.ZipFile,
+        article_data: Dict[str, Any],
+        article_number: str,
+        article_title: str,
+        root_folder: str,
+        articles_folder: str,
+        translations: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Export Google Docs files (DOCX) to ZIP instead of HTML.
+
+        For articles with Google Docs iframes, we export the downloaded DOCX files
+        in the same directory where HTMLs would normally go, with naming:
+        - Original: KBNUMBER-ARTICLENAME.docx
+        - Translations: KBNUMBER-ARTICLENAME.docx (each translation separately)
+
+        Args:
+            zf: ZipFile object to write to
+            article_data: Article data dictionary
+            article_number: Article number (e.g., 'KB0001')
+            article_title: Article title
+            root_folder: Root folder in ZIP
+            articles_folder: Articles subfolder in ZIP
+            translations: List of translation dictionaries
+        """
+        iframe_result = article_data.get('iframe_result', {})
+
+        # Process original article Google Docs
+        original = iframe_result.get('original', {})
+        original_docs = original.get('downloaded_docs', [])
+
+        if original_docs:
+            logger.info(f"Exporting {len(original_docs)} Google Docs for original article {article_number}")
+
+            for doc_path in original_docs:
+                if not os.path.exists(doc_path):
+                    logger.warning(f"Google Doc file not found: {doc_path}")
+                    continue
+
+                # Generate filename: KBNUMBER-ARTICLENAME.docx
+                safe_number = self._sanitize_filename(article_number)
+                safe_title = self._sanitize_filename(article_title)
+                docx_filename = f"{safe_number}-{safe_title}.docx"
+
+                # Add to ZIP in same directory as HTMLs would go
+                zip_path = f"{root_folder}/{articles_folder}/{docx_filename}"
+                zf.write(doc_path, zip_path)
+                logger.info(f"Added Google Doc to ZIP: {zip_path}")
+
+        # Process translation Google Docs separately
+        trans_results = iframe_result.get('translations', [])
+        for i, trans_result in enumerate(trans_results):
+            trans_docs = trans_result.get('downloaded_docs', [])
+            if not trans_docs:
+                continue
+
+            # Get translation info
+            if i < len(translations):
+                trans = translations[i]
+                trans_number = trans.get('number', '')
+                trans_title = trans.get('short_description', trans_number)
+            else:
+                trans_number = f"{article_number}_trans_{i+1}"
+                trans_title = article_title
+
+            logger.info(f"Exporting {len(trans_docs)} Google Docs for translation {trans_number}")
+
+            for doc_path in trans_docs:
+                if not os.path.exists(doc_path):
+                    logger.warning(f"Translation Google Doc file not found: {doc_path}")
+                    continue
+
+                # Generate filename: KBNUMBER-ARTICLENAME.docx for each translation
+                safe_number = self._sanitize_filename(trans_number)
+                safe_title = self._sanitize_filename(trans_title)
+                docx_filename = f"{safe_number}-{safe_title}.docx"
+
+                # Add to ZIP in same directory as HTMLs would go
+                zip_path = f"{root_folder}/{articles_folder}/{docx_filename}"
+                zf.write(doc_path, zip_path)
+                logger.info(f"Added translation Google Doc to ZIP: {zip_path}")
