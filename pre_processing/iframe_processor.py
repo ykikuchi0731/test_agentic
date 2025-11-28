@@ -180,6 +180,11 @@ class IframeProcessor:
             )
             return result
 
+        # Ensure browser is started and user is logged in
+        if not self._ensure_browser_ready():
+            result["error"] = "Failed to initialize browser or login"
+            return result
+
         try:
             # Sanitize article title for filename
             safe_filename = self._sanitize_filename(article_title)
@@ -207,19 +212,38 @@ class IframeProcessor:
                 iframe_info["file_id"], output_filename=filename
             )
 
+            # Build context for logging
+            article_context = f"Article: {article_number or 'unknown'}"
+            if article_title and article_title != "document":
+                article_context += f" ({article_title})"
+            doc_context = f"Google Doc ID: {iframe_info['file_id']}"
+
             if export_result["success"]:
                 result["success"] = True
                 result["action"] = "download"
                 result["file_path"] = export_result["file_path"]
                 result["should_remove_html"] = True
-                logger.info(f"✅ Downloaded Google Doc to: {export_result['file_path']}")
+                logger.info(
+                    f"✅ Downloaded Google Doc to: {export_result['file_path']} | "
+                    f"{article_context} | {doc_context}"
+                )
             else:
                 result["error"] = export_result.get("error", "Unknown error")
-                logger.error(f"Failed to download Google Doc: {result['error']}")
+                logger.error(
+                    f"❌ Failed to download Google Doc: {result['error']} | "
+                    f"{article_context} | {doc_context} | "
+                    f"Target filename: {filename}"
+                )
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            logger.error(f"Error processing Google Docs iframe: {e}")
+            article_context = f"Article: {article_number or 'unknown'}"
+            if article_title and article_title != "document":
+                article_context += f" ({article_title})"
+            logger.error(
+                f"❌ Error processing Google Docs iframe: {e} | "
+                f"{article_context} | Google Doc ID: {iframe_info.get('file_id', 'unknown')}"
+            )
 
         return result
 
@@ -282,6 +306,63 @@ class IframeProcessor:
 
         return result
 
+    def process_other_iframe(
+        self, iframe_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process other (non-Google) iframe: convert to anchor link.
+
+        Args:
+            iframe_info: Iframe information dictionary from detect_iframes()
+
+        Returns:
+            Processing result:
+                {
+                    'success': bool,
+                    'action': str ('convert_to_link'),
+                    'link_html': str (HTML anchor tag to replace iframe),
+                    'link_url': str (iframe source URL),
+                    'error': str (error message if failed)
+                }
+        """
+        result = {
+            "success": False,
+            "action": "convert_to_link",
+            "link_html": None,
+            "link_url": None,
+            "error": None,
+        }
+
+        if iframe_info["type"] != "other":
+            result["error"] = "Not an 'other' type iframe"
+            return result
+
+        try:
+            # Get the source URL
+            iframe_url = iframe_info["src"]
+
+            if not iframe_url:
+                result["error"] = "Iframe has no src attribute"
+                return result
+
+            # Create anchor link HTML
+            link_html = (
+                f'<p><a href="{iframe_url}" target="_blank">'
+                f"View embedded content</a></p>"
+            )
+
+            result["success"] = True
+            result["link_html"] = link_html
+            result["link_url"] = iframe_url
+
+            logger.info(f"✅ Converted iframe to link: {iframe_url}")
+
+        except Exception as e:
+            result["error"] = f"Exception during conversion: {e}"
+            logger.error(f"Error processing other iframe: {e}")
+
+        return result
+
     def process_html_iframes(
         self,
         html_content: str,
@@ -308,6 +389,7 @@ class IframeProcessor:
                         'iframes_found': int,
                         'docs_downloaded': List[str] (file paths),
                         'slides_converted': List[str] (URLs),
+                        'other_converted': List[str] (URLs),
                         'errors': List[str],
                         'is_iframe_only': bool
                     }
@@ -316,6 +398,7 @@ class IframeProcessor:
             "iframes_found": 0,
             "docs_downloaded": [],
             "slides_converted": [],
+            "other_converted": [],
             "errors": [],
             "is_iframe_only": False,
         }
@@ -338,9 +421,17 @@ class IframeProcessor:
             # Parse HTML
             soup = BeautifulSoup(html_content, self.parser)
 
+            # Find all iframes in the soup (need to find them in this soup, not the detection soup)
+            soup_iframes = soup.find_all("iframe")
+
             # Process each iframe
-            for iframe_info in iframes:
-                iframe_element = iframe_info["element"]
+            for i, iframe_info in enumerate(iframes):
+                # Get corresponding iframe from current soup
+                if i < len(soup_iframes):
+                    iframe_element = soup_iframes[i]
+                else:
+                    logger.warning(f"Could not find iframe {i} in soup")
+                    continue
 
                 # Process Google Docs
                 if iframe_info["type"] == "google_docs" and download_docs:
@@ -376,6 +467,22 @@ class IframeProcessor:
                             f"Google Slides {iframe_info['file_id']}: {result['error']}"
                         )
 
+                # Process other iframes - convert to links
+                elif iframe_info["type"] == "other":
+                    result = self.process_other_iframe(iframe_info)
+
+                    if result["success"]:
+                        summary["other_converted"].append(result["link_url"])
+
+                        # Replace iframe with anchor link
+                        link_soup = BeautifulSoup(result["link_html"], self.parser)
+                        iframe_element.replace_with(link_soup)
+                        logger.info(f"Replaced other iframe with link: {result['link_url']}")
+                    else:
+                        summary["errors"].append(
+                            f"Other iframe {iframe_info['src']}: {result['error']}"
+                        )
+
             # Return modified HTML
             modified_html = str(soup)
             return modified_html, summary
@@ -384,6 +491,39 @@ class IframeProcessor:
             logger.error(f"Error processing HTML iframes: {e}")
             summary["errors"].append(f"Processing error: {e}")
             return html_content, summary
+
+    def _ensure_browser_ready(self) -> bool:
+        """
+        Ensure browser is started and user is logged in for Google Docs export.
+
+        Returns:
+            True if browser is ready, False otherwise
+        """
+        if not self.google_docs_exporter:
+            return False
+
+        # Start browser if not already started
+        if not self.google_docs_exporter.driver:
+            logger.info("Starting browser for Google Docs export...")
+            if not self.google_docs_exporter.start_browser():
+                logger.error("Failed to start browser")
+                return False
+
+        # Perform login if not already logged in
+        if not self.google_docs_exporter.is_logged_in:
+            logger.info("Waiting for Google login...")
+            logger.info("=" * 80)
+            logger.info("MANUAL LOGIN REQUIRED")
+            logger.info("=" * 80)
+            logger.info("A browser window will open. Please log in to your Google account.")
+            logger.info("After logging in, return to this terminal and press Enter to continue.")
+            logger.info("=" * 80)
+
+            if not self.google_docs_exporter.manual_login_wait():
+                logger.error("Login failed or timed out")
+                return False
+
+        return True
 
     def _sanitize_filename(self, filename: str) -> str:
         """
@@ -500,23 +640,23 @@ class IframeProcessor:
             for translation in translations:
                 trans_html = translation.get("text", "")
                 trans_language = translation.get("language", "unknown")
+                trans_number = translation.get("number", "")
+                trans_title = translation.get("short_description", trans_number or article_title)
 
                 trans_iframes = self.detect_iframes(trans_html)
 
                 if trans_iframes:
                     logger.info(
-                        f"Processing {len(trans_iframes)} iframes in {trans_language} translation"
+                        f"Processing {len(trans_iframes)} iframes in {trans_language} translation ({trans_number})"
                     )
 
-                    # Add language suffix for filename differentiation
-                    language_suffix = f"_{trans_language}"
-
-                    # Process translation iframes with language suffix
+                    # Use translation's own article number and title for filename
+                    # This ensures each translation gets its own file: KB0001-Title.docx, KB0002-Title.docx, etc.
                     processed_trans_html, trans_summary = self._process_translation_iframes(
                         html_content=trans_html,
-                        article_title=article_title,
-                        language_suffix=language_suffix,
-                        article_number=article_number,
+                        article_title=trans_title,
+                        language_suffix="",  # No language suffix needed - use article number instead
+                        article_number=trans_number,
                     )
 
                     result["translations"].append({
@@ -572,6 +712,7 @@ class IframeProcessor:
             "iframes_found": 0,
             "docs_downloaded": [],
             "slides_converted": [],
+            "other_converted": [],
             "errors": [],
             "is_iframe_only": False,
         }
@@ -590,8 +731,16 @@ class IframeProcessor:
 
             soup = BeautifulSoup(html_content, self.parser)
 
-            for iframe_info in iframes:
-                iframe_element = iframe_info["element"]
+            # Find all iframes in the soup
+            soup_iframes = soup.find_all("iframe")
+
+            for i, iframe_info in enumerate(iframes):
+                # Get corresponding iframe from current soup
+                if i < len(soup_iframes):
+                    iframe_element = soup_iframes[i]
+                else:
+                    logger.warning(f"Could not find iframe {i} in soup")
+                    continue
 
                 # Process Google Docs with language suffix
                 if iframe_info["type"] == "google_docs":
@@ -625,6 +774,19 @@ class IframeProcessor:
                             f"Google Slides {iframe_info['file_id']}: {result['error']}"
                         )
 
+                # Process other iframes
+                elif iframe_info["type"] == "other":
+                    result = self.process_other_iframe(iframe_info)
+
+                    if result["success"]:
+                        summary["other_converted"].append(result["link_url"])
+                        link_soup = BeautifulSoup(result["link_html"], self.parser)
+                        iframe_element.replace_with(link_soup)
+                    else:
+                        summary["errors"].append(
+                            f"Other iframe {iframe_info['src']}: {result['error']}"
+                        )
+
             modified_html = str(soup)
             return modified_html, summary
 
@@ -649,7 +811,8 @@ class IframeProcessor:
                     'other_iframes_count': int,
                     'is_iframe_only': bool,
                     'google_docs_urls': List[str],
-                    'google_slides_urls': List[str]
+                    'google_slides_urls': List[str],
+                    'other_urls': List[str]
                 }
         """
         iframes = self.detect_iframes(html_content)
@@ -666,4 +829,5 @@ class IframeProcessor:
             "is_iframe_only": self.is_iframe_only_content(html_content),
             "google_docs_urls": [i["src"] for i in google_docs],
             "google_slides_urls": [i["src"] for i in google_slides],
+            "other_urls": [i["src"] for i in other],
         }

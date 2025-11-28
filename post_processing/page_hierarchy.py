@@ -317,6 +317,108 @@ class NotionPageHierarchy:
             logger.error(result["error"], exc_info=True)
             return result
 
+    def make_subitem_optimized(
+        self,
+        child_page_id: str,
+        parent_page_id: str,
+        parent_property_id: str,
+        verify: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Optimized version of make_subitem that accepts pre-cached parent_property_id.
+
+        This avoids repeated database schema lookups when creating many relationships,
+        significantly improving performance for bulk operations.
+
+        Args:
+            child_page_id: Page ID to become a sub-item
+            parent_page_id: Page ID that will be the new parent
+            parent_property_id: Pre-fetched parent property ID from database schema
+            verify: Whether to verify both pages exist before updating (default: False)
+
+        Returns:
+            Result dictionary with success status
+
+        Example:
+            # Fetch property ID once
+            prop_id = hierarchy.find_parent_item_property(database_id)
+
+            # Reuse for multiple relationships
+            for child, parent in relationships:
+                result = hierarchy.make_subitem_optimized(
+                    child_page_id=child,
+                    parent_page_id=parent,
+                    parent_property_id=prop_id,  # Reuse cached ID
+                    verify=False
+                )
+
+        Performance:
+            - Original: 1 database lookup per relationship = N API calls
+            - Optimized: 1 database lookup total = 1 API call
+            - For 100 relationships: 100 calls → 1 call (99% reduction)
+        """
+        result = {
+            "success": False,
+            "child_page_id": child_page_id,
+            "parent_page_id": parent_page_id,
+            "parent_property_id": parent_property_id,
+            "error": None,
+        }
+
+        try:
+            logger.debug(f"Making page {child_page_id} a sub-item of {parent_page_id} (optimized)")
+
+            # Verification step (optional, skipped for performance)
+            if verify:
+                child_page = self.get_page(child_page_id)
+                result["child_title"] = self._extract_page_title(child_page)
+
+                parent_page = self.get_page(parent_page_id)
+                result["parent_title"] = self._extract_page_title(parent_page)
+
+            # Update child page's "Parent item" relation property
+            update_payload = {
+                "properties": {
+                    parent_property_id: {
+                        "relation": [
+                            {
+                                "id": parent_page_id
+                            }
+                        ]
+                    }
+                }
+            }
+
+            response = requests.patch(
+                f"{self.base_url}/pages/{child_page_id}",
+                headers=self.headers,
+                json=update_payload
+            )
+            response.raise_for_status()
+
+            result["success"] = True
+            logger.debug(f"✅ Sub-item relationship created")
+
+            return result
+
+        except requests.exceptions.RequestException as e:
+            result["error"] = f"Failed to update page relation: {e}"
+            logger.error(result["error"])
+
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    result["error"] += f" - {error_detail.get('message', '')}"
+                except Exception:
+                    result["error"] += f" - {e.response.text}"
+
+            return result
+
+        except Exception as e:
+            result["error"] = f"Unexpected error: {e}"
+            logger.error(result["error"], exc_info=True)
+            return result
+
     def _extract_page_title(self, page: Dict[str, Any]) -> str:
         """
         Extract title from a Notion page object.
