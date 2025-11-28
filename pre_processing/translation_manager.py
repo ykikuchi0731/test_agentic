@@ -22,6 +22,16 @@ class TranslationManager:
         "ru": "Russian",
     }
 
+    # Standard fields to fetch for articles
+    ARTICLE_FIELDS = [
+        "sys_id",
+        "number",
+        "short_description",
+        "text",
+        "language",
+        "sys_updated_on",
+    ]
+
     def __init__(self, client):
         """
         Initialize translation manager.
@@ -50,14 +60,7 @@ class TranslationManager:
             translations = self.client.query_table(
                 table="kb_knowledge",
                 query=query,
-                fields=[
-                    "sys_id",
-                    "number",
-                    "short_description",
-                    "text",
-                    "language",
-                    "sys_updated_on",
-                ],
+                fields=self.ARTICLE_FIELDS,
             )
 
             # If no direct translations, check for sibling translations
@@ -93,15 +96,13 @@ class TranslationManager:
             if not current_article:
                 return []
 
-            current_kb_number = current_article.get("number")
-            parent_ref = current_article.get("parent", {})
-            parent_sys_id = (
-                parent_ref.get("value") if isinstance(parent_ref, dict) else parent_ref
-            )
+            parent_sys_id = self._extract_parent_sys_id(current_article.get("parent", {}))
 
             # Case 0: No parent - check if other articles reference any version as parent
             if not parent_sys_id:
-                return self._find_children_of_any_version(current_article, current_kb_number)
+                return self._find_children_of_any_version(
+                    current_article, current_article.get("number")
+                )
 
             # Case 1 & 2: Has parent
             return self._find_translations_via_parent(current_article, parent_sys_id)
@@ -125,12 +126,7 @@ class TranslationManager:
             Merged HTML string
         """
         # Collect all articles with language
-        all_articles = []
-
-        # Add original
-        original_html = original.get("text", "")
-        original_lang = self._extract_language(original)
-        all_articles.append((original_lang, original_html))
+        all_articles = [(self._extract_language(original), original.get("text", ""))]
 
         # Add translations
         for translation in translations:
@@ -144,15 +140,16 @@ class TranslationManager:
         # Create merged HTML
         merged_parts = []
         for i, (lang, html) in enumerate(all_articles):
-            lang_code = lang if lang else "unknown"
-            lang_name = self.LANG_NAMES.get(
-                lang_code, lang_code.upper() if lang_code else "Unknown"
-            )
+            # Language should always be set (defaults to 'ja' in _extract_language)
+            lang_code = lang if lang else "ja"
+            lang_name = self.LANG_NAMES.get(lang_code, lang_code.upper())
 
-            merged_parts.append(f'<div class="article-section" data-language="{lang_code}">')
-            merged_parts.append(f'<h2 class="language-header">{lang_name}</h2>')
-            merged_parts.append(html)
-            merged_parts.append("</div>")
+            merged_parts.extend([
+                f'<div class="article-section" data-language="{lang_code}">',
+                f'<h2 class="language-header">{lang_name}</h2>',
+                html,
+                '</div>'
+            ])
 
             # Add separator between sections
             if i < len(all_articles) - 1:
@@ -180,32 +177,14 @@ class TranslationManager:
         logger.info(f"Found {len(all_sys_ids)} versions of {current_kb_number}")
 
         # Find articles that have any of these versions as parent
-        translations = []
         current_lang = self._extract_language(current_article)
+        translations = []
 
         for sys_id in all_sys_ids:
-            children = self.client.query_table(
-                table="kb_knowledge",
-                query=f"parent={sys_id}^workflow_state=published^sys_id!={current_article.get('sys_id')}",
-                fields=[
-                    "sys_id",
-                    "number",
-                    "short_description",
-                    "text",
-                    "language",
-                    "sys_updated_on",
-                ],
+            children = self._query_children(sys_id, current_article.get('sys_id'))
+            translations.extend(
+                self._filter_by_different_language(children, current_lang)
             )
-
-            if children:
-                # Filter to only include different languages
-                for child in children:
-                    child_lang = self._extract_language(child)
-                    if child_lang != current_lang:
-                        logger.info(
-                            f"Found child translation: {child.get('number')} ({child_lang})"
-                        )
-                        translations.append(child)
 
         return translations
 
@@ -223,17 +202,16 @@ class TranslationManager:
         if not parent_article:
             return []
 
-        parent_kb_number = parent_article[0].get("number")
-        parent_state = parent_article[0].get("workflow_state")
-
-        # If parent is outdated, find latest published version
-        if parent_state != "outdated":
+        # Only proceed if parent is outdated
+        if parent_article[0].get("workflow_state") != "outdated":
             return []
 
+        parent_kb_number = parent_article[0].get("number")
         logger.info(
             f"Parent article {parent_kb_number} is outdated, looking for latest version"
         )
 
+        # Find latest published version
         latest_parent = self.client.query_table(
             table="kb_knowledge",
             query=f"number={parent_kb_number}^workflow_state=published",
@@ -244,15 +222,14 @@ class TranslationManager:
             return []
 
         latest_parent_sys_id = latest_parent[0].get("sys_id")
-        current_sys_id = current_article.get("sys_id")
 
-        # Case 1: Current article IS the latest parent
-        if latest_parent_sys_id == current_sys_id:
+        # Case 1: Current article IS the latest parent - find siblings
+        if latest_parent_sys_id == current_article.get("sys_id"):
             return self._find_siblings_with_same_parent(current_article, parent_sys_id)
 
-        # Case 2: Current article is a sibling
+        # Case 2: Current article is a sibling - get latest parent as translation
         return self._get_latest_parent_as_translation(
-            current_article, latest_parent, latest_parent_sys_id
+            current_article, latest_parent[0], latest_parent_sys_id
         )
 
     def _find_siblings_with_same_parent(
@@ -261,41 +238,20 @@ class TranslationManager:
         """Find siblings that share the same parent."""
         logger.info("Current article is the latest version, looking for siblings")
 
-        siblings = self.client.query_table(
-            table="kb_knowledge",
-            query=f"parent={parent_sys_id}^workflow_state=published^sys_id!={current_article.get('sys_id')}",
-            fields=[
-                "sys_id",
-                "number",
-                "short_description",
-                "text",
-                "language",
-                "sys_updated_on",
-            ],
-        )
-
-        # Filter to only include different languages
+        siblings = self._query_children(parent_sys_id, current_article.get('sys_id'))
         current_lang = self._extract_language(current_article)
-        sibling_translations = []
 
-        for sibling in siblings:
-            sibling_lang = self._extract_language(sibling)
-            if sibling_lang != current_lang:
-                logger.info(
-                    f"Found sibling translation: {sibling.get('number')} ({sibling_lang})"
-                )
-                sibling_translations.append(sibling)
-
-        return sibling_translations
+        return self._filter_by_different_language(siblings, current_lang)
 
     def _get_latest_parent_as_translation(
-        self, current_article: Dict[str, Any], latest_parent: List, latest_parent_sys_id: str
+        self, current_article: Dict[str, Any], latest_parent: Dict[str, Any],
+        latest_parent_sys_id: str
     ) -> List[Dict[str, Any]]:
         """Get latest parent as translation if different language."""
         logger.info("Current article is a sibling, using latest parent as translation")
 
         current_lang = self._extract_language(current_article)
-        latest_parent_lang = self._extract_language(latest_parent[0])
+        latest_parent_lang = self._extract_language(latest_parent)
 
         # Only include if different language
         if current_lang == latest_parent_lang:
@@ -305,14 +261,7 @@ class TranslationManager:
         latest_parent_full = self.client.query_table(
             table="kb_knowledge",
             query=f"sys_id={latest_parent_sys_id}",
-            fields=[
-                "sys_id",
-                "number",
-                "short_description",
-                "text",
-                "language",
-                "sys_updated_on",
-            ],
+            fields=self.ARTICLE_FIELDS,
         )
 
         if latest_parent_full:
@@ -323,13 +272,70 @@ class TranslationManager:
 
         return []
 
+    def _query_children(self, parent_sys_id: str, exclude_sys_id: str) -> List[Dict[str, Any]]:
+        """
+        Query for child articles of a parent.
+
+        Args:
+            parent_sys_id: Parent article sys_id
+            exclude_sys_id: Sys_id to exclude from results
+
+        Returns:
+            List of child articles
+        """
+        return self.client.query_table(
+            table="kb_knowledge",
+            query=f"parent={parent_sys_id}^workflow_state=published^sys_id!={exclude_sys_id}",
+            fields=self.ARTICLE_FIELDS,
+        )
+
+    def _filter_by_different_language(
+        self, articles: List[Dict[str, Any]], reference_lang: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter articles to only include those with different language than reference.
+
+        Args:
+            articles: List of articles to filter
+            reference_lang: Reference language to compare against
+
+        Returns:
+            Filtered list of articles
+        """
+        filtered = []
+        for article in articles:
+            article_lang = self._extract_language(article)
+            if article_lang != reference_lang:
+                logger.info(
+                    f"Found translation: {article.get('number')} ({article_lang})"
+                )
+                filtered.append(article)
+        return filtered
+
+    @staticmethod
+    def _extract_parent_sys_id(parent_ref: Any) -> str:
+        """Extract parent sys_id from reference (dict or string)."""
+        if isinstance(parent_ref, dict):
+            return parent_ref.get("value", "")
+        return str(parent_ref) if parent_ref else ""
+
     @staticmethod
     def _extract_language(article: Dict[str, Any]) -> str:
-        """Extract language code from article."""
+        """
+        Extract language code from article.
+
+        Returns:
+            Language code (e.g., 'ja', 'en'). Defaults to 'ja' if not set.
+        """
         lang = article.get("language", "")
         if isinstance(lang, dict):
-            return lang.get("value", "")
-        return str(lang)
+            lang = lang.get("value", "")
+
+        # Convert to string and strip whitespace
+        lang = str(lang).strip() if lang else ""
+
+        # Default to Japanese if language is not set
+        return lang if lang else "ja"
 
     @staticmethod
     def _lang_sort_key(item: tuple) -> tuple:

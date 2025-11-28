@@ -27,42 +27,99 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from cli_utils import CommonCLI, create_base_parser
+from cli_utils import CommonCLI
 from config import Config, ConfigurationError
+from pre_processing.client import ServiceNowClient
+from pre_processing.knowledge_base import KnowledgeBase
 
 logger = logging.getLogger(__name__)
 
 
-def cmd_migrate(args):
-    """Run full migration to export articles as ZIP for Notion import."""
-    from pre_processing.client import ServiceNowClient
-    from pre_processing.knowledge_base import KnowledgeBase
-    from pre_processing.migrator import MigrationOrchestrator
-    from pre_processing.google_docs_browser_exporter import GoogleDocsBrowserExporter
+# ============================================================================
+# Helper Functions
+# ============================================================================
 
-    print("=" * 80)
-    print("ServiceNow Knowledge Base Export")
-    print("=" * 80)
-
-    # Validate configuration
-    try:
-        Config.validate_servicenow()
-    except ConfigurationError as e:
-        logger.error(f"Configuration error: {e}")
-        return 1
-
-    # Initialize ServiceNow client
+def init_servicenow_client():
+    """Initialize and return ServiceNow client and knowledge base."""
+    Config.validate_servicenow()
     logger.info(f"Connecting to ServiceNow: {Config.SERVICENOW_INSTANCE}")
 
-    with ServiceNowClient(
+    client = ServiceNowClient(
         instance=Config.SERVICENOW_INSTANCE,
         username=Config.SERVICENOW_USERNAME,
         password=Config.SERVICENOW_PASSWORD,
         timeout=Config.API_TIMEOUT,
-    ) as sn_client:
+    )
+    kb = KnowledgeBase(client, download_dir=Config.DOWNLOAD_DIR)
+    return client, kb
 
-        # Initialize knowledge base handler
-        kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
+
+def print_separator(title=None, char="="):
+    """Print a separator line with optional title."""
+    if title:
+        print(char * 80)
+        print(title)
+    print(char * 80)
+
+
+def print_result_summary(result, success_msg, fail_msg):
+    """Print standardized result summary."""
+    if result and result.get('zip_created'):
+        print(f"\n✅ {success_msg}")
+        if result.get('zip_path'):
+            print(f"Export ZIP: {result['zip_path']}")
+        if result.get('csv_path'):
+            print(f"Article list: {result['csv_path']}")
+        print(f"Total articles exported: {result.get('total_articles', 0)}")
+        return 0
+
+    print(f"\n❌ {fail_msg}")
+    if result and result.get('errors'):
+        print(f"Errors: {result['errors']}")
+    return 1
+
+
+def flatten_hierarchy(nodes, rows=None):
+    """Flatten category hierarchy tree into list of rows for CSV export."""
+    if rows is None:
+        rows = []
+
+    for node in nodes:
+        rows.append({
+            'name': node['name'],
+            'full_path': node['full_path'],
+            'parent': node['parent'] or '(root)',
+            'ancestors': ' > '.join(node['ancestors']) if node['ancestors'] else '(none)',
+            'level': node['level'],
+            'article_count': node['article_count'],
+            'total_article_count': node['total_article_count']
+        })
+
+        if node.get('children'):
+            flatten_hierarchy(node['children'], rows)
+
+    return rows
+
+
+# ============================================================================
+# Command Implementations
+# ============================================================================
+
+def cmd_migrate(args):
+    """Run full migration to export articles as ZIP for Notion import."""
+    from pre_processing.migrator import MigrationOrchestrator
+    from pre_processing.google_docs_browser_exporter import GoogleDocsBrowserExporter
+
+    print_separator("ServiceNow Knowledge Base Export")
+
+    # Validate configuration and initialize client
+    try:
+        sn_client, kb = init_servicenow_client()
+    except ConfigurationError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
+
+    with sn_client:
 
         # Get all articles
         logger.info("Fetching articles from ServiceNow...")
@@ -97,6 +154,7 @@ def cmd_migrate(args):
             servicenow_kb=kb,
             output_dir=Config.MIGRATION_OUTPUT_DIR,
             google_docs_exporter=google_docs_exporter,
+            process_iframes=args.process_iframes,
             max_workers=args.workers if hasattr(args, 'workers') else 4,
             rate_limit_delay=args.rate_limit if hasattr(args, 'rate_limit') else 0.0
         )
@@ -105,6 +163,7 @@ def cmd_migrate(args):
         print(f"Parallel workers: {args.workers}")
         if args.rate_limit > 0:
             print(f"Rate limit: {args.rate_limit}s delay between requests")
+        print(f"Iframe processing (Google Docs export): {'Enabled' if args.process_iframes else 'Disabled'}")
 
         if args.category:
             print(f"Including only articles under category: {args.category}")
@@ -120,48 +179,23 @@ def cmd_migrate(args):
             exclude_category=args.exclude_category if hasattr(args, 'exclude_category') else None
         )
 
-        if result and result.get('zip_created'):
-            print("\n✅ Export completed successfully!")
-            if result.get('zip_path'):
-                print(f"Export ZIP: {result['zip_path']}")
-            if result.get('csv_path'):
-                print(f"Article list: {result['csv_path']}")
-            print(f"Total articles exported: {result.get('total_articles', 0)}")
-            return 0
-        else:
-            print("\n❌ Export failed!")
-            if result.get('errors'):
-                print(f"Errors: {result['errors']}")
-            return 1
+        return print_result_summary(result, "Export completed successfully!", "Export failed!")
 
 
 def cmd_export_list(args):
     """Export article list with metadata (no file downloads)."""
-    from pre_processing.client import ServiceNowClient
-    from pre_processing.knowledge_base import KnowledgeBase
     from pre_processing.article_list_exporter import ArticleListExporter
 
-    print("=" * 80)
-    print("Export Article List (Metadata Only)")
-    print("=" * 80)
+    print_separator("Export Article List (Metadata Only)")
 
-    # Validate configuration
+    # Validate configuration and initialize client
     try:
-        Config.validate_servicenow()
+        sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
 
-    # Initialize ServiceNow client
-    with ServiceNowClient(
-        instance=Config.SERVICENOW_INSTANCE,
-        username=Config.SERVICENOW_USERNAME,
-        password=Config.SERVICENOW_PASSWORD,
-        timeout=Config.API_TIMEOUT,
-    ) as sn_client:
-
-        # Initialize knowledge base handler
-        kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
+    with sn_client:
 
         # Initialize exporter
         exporter = ArticleListExporter(
@@ -190,10 +224,8 @@ def cmd_export_list(args):
         logger.info(f"Exporting {len(article_metadata)} articles")
 
         # Export based on format
-        if args.format == 'csv':
-            output_path = exporter.export_to_csv(article_metadata)
-        else:
-            output_path = exporter.export_to_json(article_metadata)
+        output_path = (exporter.export_to_csv(article_metadata) if args.format == 'csv'
+                       else exporter.export_to_json(article_metadata))
 
         print(f"\n✅ Exported {len(article_metadata)} articles to: {output_path}")
         return 0
@@ -201,20 +233,12 @@ def cmd_export_list(args):
 
 def cmd_process_iframes(args):
     """Process iframes in article HTML."""
-    from pre_processing.iframe_processor import IframeProcessor
-
-    print("=" * 80)
-    print("Process iframes in Article HTML")
-    print("=" * 80)
+    print_separator("Process iframes in Article HTML")
 
     if not args.article_number:
         logger.error("--article-number is required")
         return 1
 
-    # Initialize iframe processor
-    processor = IframeProcessor()
-
-    # This is a simplified version - full implementation would fetch article from ServiceNow
     logger.info(f"Processing iframes for article: {args.article_number}")
 
     if args.dry_run:
@@ -230,11 +254,8 @@ def cmd_make_subitem(args):
     """Make a Notion page a sub-item of another page."""
     from post_processing.page_hierarchy import NotionPageHierarchy
 
-    print("=" * 80)
-    print("Make Notion Page a Sub-Item")
-    print("=" * 80)
+    print_separator("Make Notion Page a Sub-Item")
 
-    # Validate configuration
     try:
         Config.validate_notion()
     except ConfigurationError as e:
@@ -267,21 +288,17 @@ def cmd_make_subitem(args):
         print(f"Database: {result['database_id']}")
         print(f"Parent property ID: {result['parent_property_id']}")
         return 0
-    else:
-        print(f"\n❌ Error: {result['error']}")
-        return 1
+
+    print(f"\n❌ Error: {result['error']}")
+    return 1
 
 
 def cmd_organize_categories(args):
     """Build category hierarchy in Notion database from article list CSV."""
-    from pathlib import Path
     from post_processing.category_organizer import build_categories_from_csv
 
-    print("=" * 80)
-    print("Organize Categories in Notion Database")
-    print("=" * 80)
+    print_separator("Organize Categories in Notion Database")
 
-    # Validate configuration
     try:
         Config.validate_notion()
     except ConfigurationError as e:
@@ -316,9 +333,7 @@ def cmd_organize_categories(args):
     )
 
     # Display results
-    print("\n" + "=" * 80)
-    print("Results:")
-    print("=" * 80)
+    print_separator("Results", "-")
     print(f"Success: {'✅ Yes' if result['success'] else '❌ No'}")
     print(f"Categories created: {result['categories_created']}")
     print(f"Relationships created: {result['relationships_created']}")
@@ -326,8 +341,8 @@ def cmd_organize_categories(args):
 
     if result['errors']:
         print("\nErrors encountered:")
-        for error in result['errors'][:10]:  # Show first 10 errors
-            print(f"  - {error}")
+        for i, error in enumerate(result['errors'][:10], 1):
+            print(f"  {i}. {error}")
         if len(result['errors']) > 10:
             print(f"  ... and {len(result['errors']) - 10} more errors")
 
@@ -356,32 +371,17 @@ def cmd_export_categories(args):
     """Export category hierarchy to JSON or CSV."""
     import json
     import csv
-    from pathlib import Path
-    from pre_processing.client import ServiceNowClient
-    from pre_processing.knowledge_base import KnowledgeBase
     from pre_processing.category_hierarchy import CategoryHierarchyBuilder
 
-    print("=" * 80)
-    print("Export Category Hierarchy")
-    print("=" * 80)
+    print_separator("Export Category Hierarchy")
 
-    # Validate configuration
     try:
-        Config.validate_servicenow()
+        sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
 
-    # Initialize ServiceNow client
-    with ServiceNowClient(
-        instance=Config.SERVICENOW_INSTANCE,
-        username=Config.SERVICENOW_USERNAME,
-        password=Config.SERVICENOW_PASSWORD,
-        timeout=Config.API_TIMEOUT,
-    ) as sn_client:
-
-        # Initialize knowledge base handler
-        kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
+    with sn_client:
 
         # Get all articles with display values for human-readable category names
         logger.info("Fetching articles from ServiceNow...")
@@ -414,41 +414,19 @@ def cmd_export_categories(args):
             logger.info(f"✅ Exported hierarchy to JSON: {output_path}")
 
         elif args.format == 'csv':
-            # Flatten hierarchy for CSV
-            def flatten_hierarchy(nodes, rows=None):
-                if rows is None:
-                    rows = []
-
-                for node in nodes:
-                    rows.append({
-                        'name': node['name'],
-                        'full_path': node['full_path'],
-                        'parent': node['parent'] or '(root)',
-                        'ancestors': ' > '.join(node['ancestors']) if node['ancestors'] else '(none)',
-                        'level': node['level'],
-                        'article_count': node['article_count'],
-                        'total_article_count': node['total_article_count']
-                    })
-
-                    if node.get('children'):
-                        flatten_hierarchy(node['children'], rows)
-
-                return rows
-
             rows = flatten_hierarchy(hierarchy)
+            fieldnames = ['name', 'full_path', 'parent', 'ancestors', 'level',
+                          'article_count', 'total_article_count']
 
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=['name', 'full_path', 'parent', 'ancestors', 'level', 'article_count', 'total_article_count'])
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
 
             logger.info(f"✅ Exported hierarchy to CSV: {output_path}")
 
         # Show summary
-        print()
-        print("=" * 80)
-        print("Export Summary")
-        print("=" * 80)
+        print_separator("Export Summary", "-")
         print(f"Total articles: {len(articles)}")
         print(f"Top-level categories: {len(hierarchy)}")
         print(f"Output file: {output_path}")
@@ -460,31 +438,17 @@ def cmd_export_categories(args):
 
 def cmd_visualize(args):
     """Visualize category hierarchy."""
-    from pre_processing.client import ServiceNowClient
-    from pre_processing.knowledge_base import KnowledgeBase
     from pre_processing.category_hierarchy import CategoryHierarchyBuilder
 
-    print("=" * 80)
-    print("Visualize Category Hierarchy")
-    print("=" * 80)
+    print_separator("Visualize Category Hierarchy")
 
-    # Validate configuration
     try:
-        Config.validate_servicenow()
+        sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
 
-    # Initialize ServiceNow client
-    with ServiceNowClient(
-        instance=Config.SERVICENOW_INSTANCE,
-        username=Config.SERVICENOW_USERNAME,
-        password=Config.SERVICENOW_PASSWORD,
-        timeout=Config.API_TIMEOUT,
-    ) as sn_client:
-
-        # Initialize knowledge base handler
-        kb = KnowledgeBase(sn_client, download_dir=Config.DOWNLOAD_DIR)
+    with sn_client:
 
         # Get all articles
         logger.info("Fetching articles from ServiceNow...")

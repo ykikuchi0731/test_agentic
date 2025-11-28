@@ -272,6 +272,14 @@ class ArticleFetcher:
             f"Fetched {len(attachments)} total attachments from original + {len(translations)} translations"
         )
 
+        # Extract attachment sys_ids from HTML and fetch any missing ones
+        missing_attachments = self._fetch_orphaned_attachments(
+            original_article, translations, attachments
+        )
+        if missing_attachments:
+            logger.info(f"Found {len(missing_attachments)} orphaned attachments referenced in HTML")
+            attachments.extend(missing_attachments)
+
         # Process iframes if enabled
         html_content, iframe_result, downloaded_docs, requires_special_handling, flag_message = (
             self._process_iframes(original_article, translations, attachments)
@@ -389,6 +397,99 @@ class ArticleFetcher:
                 downloaded_docs.append(doc_path)
 
         return html_content, iframe_result, downloaded_docs, requires_special_handling, flag_message
+
+    def _fetch_orphaned_attachments(
+        self,
+        original_article: Dict[str, Any],
+        translations: List[Dict[str, Any]],
+        existing_attachments: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch attachments that are referenced in HTML but not formally attached to articles.
+
+        This handles cases where HTML contains attachment references from old article versions
+        or copied from other articles.
+
+        Args:
+            original_article: Original article data
+            translations: List of translation articles
+            existing_attachments: Already fetched attachments
+
+        Returns:
+            List of newly fetched orphaned attachments
+        """
+        import re
+        from bs4 import BeautifulSoup
+
+        # Extract all attachment sys_ids from existing attachments
+        existing_sys_ids = {att.get('sys_id') for att in existing_attachments}
+
+        # Extract sys_ids from HTML
+        all_html = [original_article.get('text', '')] + [t.get('text', '') for t in translations]
+        referenced_sys_ids = set()
+
+        for html in all_html:
+            if not html:
+                continue
+
+            # Find sys_id in various ServiceNow attachment URL formats
+            patterns = [
+                r'sys_attachment\.do\?sys_id=([a-f0-9]{32})',
+                r'/attachment/([a-f0-9]{32})/',
+                r'attachment\.do\?sys_id=([a-f0-9]{32})',
+            ]
+
+            for pattern in patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE)
+                referenced_sys_ids.update(matches)
+
+        # Find orphaned sys_ids (referenced but not fetched)
+        orphaned_sys_ids = referenced_sys_ids - existing_sys_ids
+
+        if not orphaned_sys_ids:
+            return []
+
+        logger.info(
+            f"Found {len(orphaned_sys_ids)} attachment references in HTML not linked to articles: "
+            f"{list(orphaned_sys_ids)[:5]}{'...' if len(orphaned_sys_ids) > 5 else ''}"
+        )
+
+        # Fetch orphaned attachments
+        orphaned_attachments = []
+        for sys_id in orphaned_sys_ids:
+            try:
+                attachments = self.kb.client.query_table(
+                    table='sys_attachment',
+                    query=f'sys_id={sys_id}',
+                    fields=['sys_id', 'file_name', 'content_type', 'size_bytes', 'sys_created_on', 'download_link']
+                )
+
+                if attachments:
+                    att = attachments[0]
+                    logger.info(f"Fetching orphaned attachment: {att.get('file_name')} (sys_id: {sys_id})")
+
+                    # Download the file
+                    content = self.kb.client.get_attachment(sys_id)
+
+                    # Save to download directory
+                    download_dir = self.kb.attachment_mgr.download_dir
+                    orphan_dir = download_dir / 'orphaned_attachments'
+                    orphan_dir.mkdir(parents=True, exist_ok=True)
+
+                    file_path = orphan_dir / att.get('file_name', f'{sys_id}.bin')
+                    file_path.write_bytes(content)
+                    att['file_path'] = str(file_path)
+
+                    orphaned_attachments.append(att)
+                    logger.info(f"✅ Downloaded orphaned attachment: {att.get('file_name')}")
+                else:
+                    logger.warning(f"Orphaned attachment {sys_id} not found in ServiceNow")
+
+            except Exception as e:
+                logger.error(f"Error fetching orphaned attachment {sys_id}: {e}")
+                continue
+
+        return orphaned_attachments
 
     def _create_attachment_entry(
         self, doc_path: str, language: Optional[str] = None
