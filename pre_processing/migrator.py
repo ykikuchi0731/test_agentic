@@ -20,6 +20,7 @@ class MigrationOrchestrator:
         process_iframes: bool = True,
         max_workers: int = 4,
         rate_limit_delay: float = 0.0,
+        max_articles_per_zip: int = 300,
     ):
         """
         Initialize migration orchestrator.
@@ -31,10 +32,12 @@ class MigrationOrchestrator:
             process_iframes: Whether to process Google Docs/Slides iframes (default: True)
             max_workers: Maximum number of parallel workers (default: 4)
             rate_limit_delay: Delay in seconds between API requests to avoid throttling (default: 0.0)
+            max_articles_per_zip: Maximum articles per ZIP file (default: 300)
         """
         self.servicenow_kb = servicenow_kb
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.max_articles_per_zip = max_articles_per_zip
 
         # Initialize ZIP exporter
         from .zip_exporter import ZipExporter
@@ -127,7 +130,10 @@ class MigrationOrchestrator:
 
             # Create ZIP export
             logger.info(f"Creating ZIP export with {len(articles_data)} articles")
-            zip_path = self.zip_exporter.create_bulk_zip(articles_data)
+            zip_path = self.zip_exporter.create_bulk_zip(
+                articles_data,
+                max_articles_per_zip=self.max_articles_per_zip
+            )
 
             # Rename if custom filename provided
             if zip_filename:

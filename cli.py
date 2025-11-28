@@ -156,7 +156,8 @@ def cmd_migrate(args):
             google_docs_exporter=google_docs_exporter,
             process_iframes=args.process_iframes,
             max_workers=args.workers if hasattr(args, 'workers') else 4,
-            rate_limit_delay=args.rate_limit if hasattr(args, 'rate_limit') else 0.0
+            rate_limit_delay=args.rate_limit if hasattr(args, 'rate_limit') else 0.0,
+            max_articles_per_zip=args.max_per_zip if hasattr(args, 'max_per_zip') else 300
         )
 
         # Show configuration
@@ -164,6 +165,7 @@ def cmd_migrate(args):
         if args.rate_limit > 0:
             print(f"Rate limit: {args.rate_limit}s delay between requests")
         print(f"Iframe processing (Google Docs export): {'Enabled' if args.process_iframes else 'Disabled'}")
+        print(f"Max articles per ZIP: {args.max_per_zip}")
 
         if args.category:
             print(f"Including only articles under category: {args.category}")
@@ -523,6 +525,14 @@ def main():
         '--no-zip',
         action='store_true',
         help='Do not create ZIP file (keep extracted files)'
+    )
+    migrate_parser.add_argument(
+        '--max-per-zip',
+        type=int,
+        default=300,
+        metavar='N',
+        help='Maximum number of articles per ZIP file (default: 300). '
+             'Large exports will be split into multiple ZIPs.'
     )
     migrate_parser.set_defaults(func=cmd_migrate)
 

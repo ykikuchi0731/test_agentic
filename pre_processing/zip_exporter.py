@@ -74,15 +74,16 @@ class ZipExporter:
         logger.info(f"ZIP created: {zip_path}")
         return str(zip_path)
 
-    def create_bulk_zip(self, articles_data: List[Dict[str, Any]]) -> str:
+    def create_bulk_zip(self, articles_data: List[Dict[str, Any]], max_articles_per_zip: int = 300) -> str:
         """
-        Create a single ZIP file containing multiple articles.
+        Create ZIP file(s) containing articles, splitting into multiple ZIPs if needed.
 
         Args:
             articles_data: List of dictionaries with article, attachments, and html
+            max_articles_per_zip: Maximum number of articles per ZIP file (default: 300)
 
         Returns:
-            Path to created ZIP file
+            Path to primary created ZIP file (first one if split)
 
         Example:
             articles_data = [
@@ -93,15 +94,21 @@ class ZipExporter:
                     'category_path': [...]
                 }
             ]
-            zip_path = exporter.create_bulk_zip(articles_data)
+            zip_path = exporter.create_bulk_zip(articles_data, max_articles_per_zip=300)
         """
         from datetime import datetime
 
-        logger.info(f"Creating bulk ZIP for {len(articles_data)} articles")
+        total_articles = len(articles_data)
+        logger.info(f"Creating bulk ZIP for {total_articles} articles")
 
         # Generate timestamp for filename and folder name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        zip_path = self.output_dir / f"servicenow_export_{timestamp}.zip"
+
+        # Calculate number of ZIPs needed
+        num_zips = (total_articles + max_articles_per_zip - 1) // max_articles_per_zip
+
+        if num_zips > 1:
+            logger.info(f"Splitting into {num_zips} ZIP files ({max_articles_per_zip} articles per ZIP)")
 
         # Root folder name inside ZIP
         root_folder = "(Migration用) Merportal"
@@ -109,46 +116,70 @@ class ZipExporter:
         # Articles folder with export timestamp
         articles_folder = f"articles_exported_{timestamp}"
 
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Add each article
-            for i, article_data in enumerate(articles_data, 1):
-                article = article_data['article']
-                article_number = article.get('number', f'article_{i}')
-                article_title = article.get('short_description', article_number)
-                translations = article_data.get('translations', [])
+        # Track created ZIP paths
+        created_zips = []
 
-                logger.info(f"Adding article {i}/{len(articles_data)}: {article_number}")
+        # Process articles in chunks
+        for zip_index in range(num_zips):
+            start_idx = zip_index * max_articles_per_zip
+            end_idx = min(start_idx + max_articles_per_zip, total_articles)
+            chunk = articles_data[start_idx:end_idx]
 
-                # Generate filename (combined if translations exist)
-                html_filename, safe_number = self._generate_filename(
-                    article, article_number, article_title, translations
-                )
+            # Create ZIP filename with suffix if multiple ZIPs
+            if num_zips > 1:
+                zip_filename = f"servicenow_export_{timestamp}_{zip_index + 1:03d}.zip"
+                logger.info(f"Creating ZIP {zip_index + 1}/{num_zips}: {zip_filename} ({len(chunk)} articles)")
+            else:
+                zip_filename = f"servicenow_export_{timestamp}.zip"
 
-                # HTML goes in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
-                html_path = f"{root_folder}/{articles_folder}/{html_filename}"
+            zip_path = self.output_dir / zip_filename
+            created_zips.append(str(zip_path))
 
-                # Attachments go in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
-                # Using "attachments_" prefix makes it easy to identify attachment folders
-                article_attachments_dir = f"{root_folder}/{articles_folder}/attachments_{safe_number}/"
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # Add each article in this chunk
+                for i, article_data in enumerate(chunk, 1):
+                    article = article_data['article']
+                    article_number = article.get('number', f'article_{start_idx + i}')
+                    article_title = article.get('short_description', article_number)
+                    translations = article_data.get('translations', [])
 
-                # Update HTML with correct relative paths to attachments
-                # Since HTML is in articles_exported_YYYYMMDD_HHMM/ and attachments are in articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/
-                # The relative path from HTML should be: attachments_ARTICLE_NUMBER/attachments/filename
-                html_content = article_data.get('html_content', '')
-                attachments = article_data.get('attachments', [])
-                updated_html, attachment_map = self._update_html_links(
-                    html_content, attachments, f"attachments_{safe_number}"
-                )
+                    global_index = start_idx + i
+                    logger.info(f"Adding article {global_index}/{total_articles}: {article_number}")
 
-                # Add HTML file in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
-                zf.writestr(html_path, updated_html)
+                    # Generate filename (combined if translations exist)
+                    html_filename, safe_number = self._generate_filename(
+                        article, article_number, article_title, translations
+                    )
 
-                # Add attachments in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ARTICLE_NUMBER/attachments/ folder
-                if attachments:
-                    self._add_attachments_to_zip(zf, attachments, attachment_map, article_attachments_dir)
+                    # HTML goes in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
+                    html_path = f"{root_folder}/{articles_folder}/{html_filename}"
 
-        logger.info(f"Bulk ZIP created: {zip_path}")
-        return str(zip_path)
+                    # Attachments go in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
+                    article_attachments_dir = f"{root_folder}/{articles_folder}/attachments_{safe_number}/"
+
+                    # Update HTML with correct relative paths to attachments
+                    html_content = article_data.get('html_content', '')
+                    attachments = article_data.get('attachments', [])
+                    updated_html, attachment_map = self._update_html_links(
+                        html_content, attachments, f"attachments_{safe_number}"
+                    )
+
+                    # Add HTML file in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/ folder
+                    zf.writestr(html_path, updated_html)
+
+                    # Add attachments in (Migration用) Merportal/articles_exported_YYYYMMDD_HHMM/attachments_ARTICLE_NUMBER/attachments/ folder
+                    if attachments:
+                        self._add_attachments_to_zip(zf, attachments, attachment_map, article_attachments_dir)
+
+            logger.info(f"ZIP created: {zip_path}")
+
+        if num_zips > 1:
+            logger.info(f"✅ Created {num_zips} ZIP files with {total_articles} total articles")
+        else:
+            logger.info(f"✅ Bulk ZIP created: {created_zips[0]}")
+
+        # Return the first ZIP path
+        return created_zips[0]
 
     def _generate_filename(self, article: Dict[str, Any], article_number: str,
                           article_title: str, translations: List[Dict[str, Any]]) -> Tuple[str, str]:
