@@ -147,7 +147,9 @@ def cmd_migrate(args):
         # Initialize Google Docs exporter if requested
         google_docs_exporter = None
         if args.process_iframes:
-            google_docs_exporter = GoogleDocsBrowserExporter()
+            google_docs_exporter = GoogleDocsBrowserExporter(
+                headless=not args.browser_gui if hasattr(args, 'browser_gui') else True
+            )
 
         # Initialize migrator
         migrator = MigrationOrchestrator(
@@ -164,7 +166,11 @@ def cmd_migrate(args):
         print(f"Parallel workers: {args.workers}")
         if args.rate_limit > 0:
             print(f"Rate limit: {args.rate_limit}s delay between requests")
-        print(f"Iframe processing (Google Docs export): {'Enabled' if args.process_iframes else 'Disabled'}")
+        if args.process_iframes:
+            browser_mode = "GUI mode" if hasattr(args, 'browser_gui') and args.browser_gui else "headless mode"
+            print(f"Iframe processing (Google Docs export): Enabled ({browser_mode})")
+        else:
+            print(f"Iframe processing (Google Docs export): Disabled")
         print(f"Max articles per ZIP: {args.max_per_zip}")
 
         if args.category:
@@ -520,6 +526,11 @@ def main():
         '--process-iframes',
         action='store_true',
         help='Enable iframe processing (Google Docs export)'
+    )
+    migrate_parser.add_argument(
+        '--browser-gui',
+        action='store_true',
+        help='Show browser GUI when exporting Google Docs (default: headless mode)'
     )
     migrate_parser.add_argument(
         '--no-zip',

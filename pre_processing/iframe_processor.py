@@ -180,6 +180,11 @@ class IframeProcessor:
             )
             return result
 
+        # Ensure browser is started and user is logged in
+        if not self._ensure_browser_ready():
+            result["error"] = "Failed to initialize browser or login"
+            return result
+
         try:
             # Sanitize article title for filename
             safe_filename = self._sanitize_filename(article_title)
@@ -207,19 +212,38 @@ class IframeProcessor:
                 iframe_info["file_id"], output_filename=filename
             )
 
+            # Build context for logging
+            article_context = f"Article: {article_number or 'unknown'}"
+            if article_title and article_title != "document":
+                article_context += f" ({article_title})"
+            doc_context = f"Google Doc ID: {iframe_info['file_id']}"
+
             if export_result["success"]:
                 result["success"] = True
                 result["action"] = "download"
                 result["file_path"] = export_result["file_path"]
                 result["should_remove_html"] = True
-                logger.info(f"✅ Downloaded Google Doc to: {export_result['file_path']}")
+                logger.info(
+                    f"✅ Downloaded Google Doc to: {export_result['file_path']} | "
+                    f"{article_context} | {doc_context}"
+                )
             else:
                 result["error"] = export_result.get("error", "Unknown error")
-                logger.error(f"Failed to download Google Doc: {result['error']}")
+                logger.error(
+                    f"❌ Failed to download Google Doc: {result['error']} | "
+                    f"{article_context} | {doc_context} | "
+                    f"Target filename: {filename}"
+                )
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            logger.error(f"Error processing Google Docs iframe: {e}")
+            article_context = f"Article: {article_number or 'unknown'}"
+            if article_title and article_title != "document":
+                article_context += f" ({article_title})"
+            logger.error(
+                f"❌ Error processing Google Docs iframe: {e} | "
+                f"{article_context} | Google Doc ID: {iframe_info.get('file_id', 'unknown')}"
+            )
 
         return result
 
@@ -467,6 +491,39 @@ class IframeProcessor:
             logger.error(f"Error processing HTML iframes: {e}")
             summary["errors"].append(f"Processing error: {e}")
             return html_content, summary
+
+    def _ensure_browser_ready(self) -> bool:
+        """
+        Ensure browser is started and user is logged in for Google Docs export.
+
+        Returns:
+            True if browser is ready, False otherwise
+        """
+        if not self.google_docs_exporter:
+            return False
+
+        # Start browser if not already started
+        if not self.google_docs_exporter.driver:
+            logger.info("Starting browser for Google Docs export...")
+            if not self.google_docs_exporter.start_browser():
+                logger.error("Failed to start browser")
+                return False
+
+        # Perform login if not already logged in
+        if not self.google_docs_exporter.is_logged_in:
+            logger.info("Waiting for Google login...")
+            logger.info("=" * 80)
+            logger.info("MANUAL LOGIN REQUIRED")
+            logger.info("=" * 80)
+            logger.info("A browser window will open. Please log in to your Google account.")
+            logger.info("After logging in, return to this terminal and press Enter to continue.")
+            logger.info("=" * 80)
+
+            if not self.google_docs_exporter.manual_login_wait():
+                logger.error("Login failed or timed out")
+                return False
+
+        return True
 
     def _sanitize_filename(self, filename: str) -> str:
         """
