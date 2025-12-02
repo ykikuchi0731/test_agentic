@@ -75,17 +75,17 @@ class ArticleFetcher:
             articles = self._filter_by_category(articles, category_filter, exclude_category)
             logger.info(f"After category filtering: {len(articles)} articles")
 
-        # Apply limit BEFORE deduplication if specified
-        # This ensures we get the right number of raw articles before pairing
-        if limit is not None and limit > 0:
-            articles = articles[:limit]
-            logger.info(f"Limited to {len(articles)} articles (before deduplication)")
-
         # Deduplicate translation pairs BEFORE fetching full data
         # This prevents downloading the same Google Docs twice for translation pairs
         if deduplicate_first:
             articles = self._deduplicate_article_list(articles)
-            logger.info(f"After early deduplication: {len(articles)} unique articles to fetch")
+            logger.info(f"After early deduplication: {len(articles)} unique articles")
+
+        # Apply limit AFTER deduplication to get consistent results
+        # This ensures we get the requested number of unique articles
+        if limit is not None and limit > 0:
+            articles = articles[:limit]
+            logger.info(f"Limited to {len(articles)} articles (after deduplication)")
 
         # Fetch article data (including iframe processing)
         return self._fetch_articles_data(articles)
