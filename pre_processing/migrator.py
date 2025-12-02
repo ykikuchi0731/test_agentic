@@ -108,18 +108,17 @@ class MigrationOrchestrator:
 
         try:
             # Fetch articles with full data
+            # Note: Deduplication now happens inside fetch_all_articles (deduplicate_first=True)
+            # to prevent downloading the same Google Docs twice for translation pairs
             logger.info("Fetching articles from ServiceNow")
             articles_data = self.article_fetcher.fetch_all_articles(
                 query=query,
                 limit=limit,
                 category_filter=category_filter,
                 exclude_category=exclude_category,
+                deduplicate_first=True,  # Deduplicate BEFORE processing iframes
             )
-
-            # Deduplicate translation pairs
-            logger.info(f"Deduplicating {len(articles_data)} articles")
-            articles_data = self.article_fetcher.deduplicate_translation_pairs(articles_data)
-            logger.info(f"After deduplication: {len(articles_data)} unique articles/pairs")
+            logger.info(f"Fetched {len(articles_data)} unique articles/pairs")
 
             results["total_articles"] = len(articles_data)
             results["articles_data"] = articles_data

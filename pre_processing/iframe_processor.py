@@ -424,6 +424,9 @@ class IframeProcessor:
             # Find all iframes in the soup (need to find them in this soup, not the detection soup)
             soup_iframes = soup.find_all("iframe")
 
+            # Track downloaded Google Docs to avoid duplicates (same file_id)
+            downloaded_doc_ids = set()
+
             # Process each iframe
             for i, iframe_info in enumerate(iframes):
                 # Get corresponding iframe from current soup
@@ -435,12 +438,22 @@ class IframeProcessor:
 
                 # Process Google Docs
                 if iframe_info["type"] == "google_docs" and download_docs:
+                    file_id = iframe_info.get("file_id")
+
+                    # Check if we've already downloaded this Google Doc
+                    if file_id in downloaded_doc_ids:
+                        logger.info(f"Skipping duplicate Google Doc iframe: {file_id} (already downloaded)")
+                        # Still remove the iframe from HTML
+                        iframe_element.decompose()
+                        continue
+
                     result = self.process_google_docs_iframe(
                         iframe_info, article_title, article_number=article_number
                     )
 
                     if result["success"]:
                         summary["docs_downloaded"].append(result["file_path"])
+                        downloaded_doc_ids.add(file_id)  # Mark as downloaded
 
                         # Remove iframe from HTML if download successful
                         if result["should_remove_html"]:
@@ -734,6 +747,9 @@ class IframeProcessor:
             # Find all iframes in the soup
             soup_iframes = soup.find_all("iframe")
 
+            # Track downloaded Google Docs to avoid duplicates (same file_id)
+            downloaded_doc_ids = set()
+
             for i, iframe_info in enumerate(iframes):
                 # Get corresponding iframe from current soup
                 if i < len(soup_iframes):
@@ -744,6 +760,15 @@ class IframeProcessor:
 
                 # Process Google Docs with language suffix
                 if iframe_info["type"] == "google_docs":
+                    file_id = iframe_info.get("file_id")
+
+                    # Check if we've already downloaded this Google Doc
+                    if file_id in downloaded_doc_ids:
+                        logger.info(f"Skipping duplicate Google Doc iframe in translation: {file_id} (already downloaded)")
+                        # Still remove the iframe from HTML
+                        iframe_element.decompose()
+                        continue
+
                     result = self.process_google_docs_iframe(
                         iframe_info,
                         article_title,
@@ -753,6 +778,7 @@ class IframeProcessor:
 
                     if result["success"]:
                         summary["docs_downloaded"].append(result["file_path"])
+                        downloaded_doc_ids.add(file_id)  # Mark as downloaded
 
                         if result["should_remove_html"]:
                             iframe_element.decompose()

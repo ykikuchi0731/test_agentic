@@ -44,6 +44,7 @@ class ArticleFetcher:
         limit: Optional[int] = None,
         category_filter: Optional[str] = None,
         exclude_category: Optional[str] = None,
+        deduplicate_first: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Fetch all articles with full data from ServiceNow.
@@ -53,6 +54,8 @@ class ArticleFetcher:
             limit: Maximum number of articles to fetch
             category_filter: Include only articles under this category
             exclude_category: Exclude articles under this category
+            deduplicate_first: If True, deduplicates translation pairs before fetching full data
+                              to avoid downloading the same Google Docs twice (recommended)
 
         Returns:
             List of article data dictionaries
@@ -72,12 +75,19 @@ class ArticleFetcher:
             articles = self._filter_by_category(articles, category_filter, exclude_category)
             logger.info(f"After category filtering: {len(articles)} articles")
 
-        # Apply limit
+        # Apply limit BEFORE deduplication if specified
+        # This ensures we get the right number of raw articles before pairing
         if limit is not None and limit > 0:
             articles = articles[:limit]
-            logger.info(f"Limited to {len(articles)} articles")
+            logger.info(f"Limited to {len(articles)} articles (before deduplication)")
 
-        # Fetch article data
+        # Deduplicate translation pairs BEFORE fetching full data
+        # This prevents downloading the same Google Docs twice for translation pairs
+        if deduplicate_first:
+            articles = self._deduplicate_article_list(articles)
+            logger.info(f"After early deduplication: {len(articles)} unique articles to fetch")
+
+        # Fetch article data (including iframe processing)
         return self._fetch_articles_data(articles)
 
     def fetch_single_article(self, article_sys_id: str) -> Dict[str, Any]:
@@ -92,11 +102,121 @@ class ArticleFetcher:
         """
         return self._fetch_article_data(article_sys_id)
 
+    def _deduplicate_article_list(
+        self, articles: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Deduplicate article list (lightweight metadata) before fetching full data.
+
+        This prevents downloading the same Google Docs twice for translation pairs.
+        For each translation pair, keeps only one article (whichever comes first).
+
+        Note: Translation relationships can be one-way in ServiceNow. Article A may have
+        translation B, but B may not list A as a translation. We need to build a complete
+        bidirectional map of all translation relationships.
+
+        Args:
+            articles: List of lightweight article dictionaries (from get_latest_articles_only)
+
+        Returns:
+            Deduplicated list of articles
+        """
+        # First pass: Build complete bidirectional translation map
+        # Map of article_sys_id -> set of related article sys_ids (including self)
+        translation_groups = {}
+
+        for article in articles:
+            article_sys_id = article.get("sys_id")
+            if article_sys_id not in translation_groups:
+                translation_groups[article_sys_id] = {article_sys_id}
+
+            # Get translations for this article
+            translations = self.kb._get_translations_for_article(article_sys_id)
+            for trans in translations:
+                trans_sys_id = trans.get("sys_id")
+                if trans_sys_id:
+                    # Add bidirectional relationship
+                    translation_groups[article_sys_id].add(trans_sys_id)
+                    if trans_sys_id not in translation_groups:
+                        translation_groups[trans_sys_id] = {trans_sys_id}
+                    translation_groups[trans_sys_id].add(article_sys_id)
+
+        # Merge groups that share any articles (union-find)
+        # This handles cases where A->B and C->B but A doesn't know about C
+        merged_groups = []
+        processed = set()
+
+        for article_sys_id in translation_groups:
+            if article_sys_id in processed:
+                continue
+
+            # Start with this article's group
+            group = translation_groups[article_sys_id].copy()
+            processed.update(group)
+
+            # Keep expanding until no new articles are added
+            changed = True
+            while changed:
+                changed = False
+                new_members = set()
+                for member_id in group:
+                    if member_id in translation_groups:
+                        related = translation_groups[member_id] - processed
+                        if related:
+                            new_members.update(related)
+                            changed = True
+                if new_members:
+                    group.update(new_members)
+                    processed.update(new_members)
+
+            merged_groups.append(group)
+
+        # Second pass: Keep only first article from each group
+        seen_sys_ids = set()
+        deduplicated = []
+
+        for article in articles:
+            article_sys_id = article.get("sys_id")
+
+            if article_sys_id in seen_sys_ids:
+                logger.debug(
+                    f"Skipping {article.get('number')} - already processed as translation"
+                )
+                continue
+
+            # Find which group this article belongs to
+            article_group = None
+            for group in merged_groups:
+                if article_sys_id in group:
+                    article_group = group
+                    break
+
+            if article_group:
+                # Mark entire group as seen
+                seen_sys_ids.update(article_group)
+
+                if len(article_group) > 1:
+                    logger.debug(
+                        f"Keeping {article.get('number')} as representative of translation group "
+                        f"with {len(article_group)} articles"
+                    )
+            else:
+                # No translation group - single article
+                seen_sys_ids.add(article_sys_id)
+
+            deduplicated.append(article)
+
+        logger.info(f"Early deduplication: {len(articles)} -> {len(deduplicated)} articles")
+        return deduplicated
+
     def deduplicate_translation_pairs(
         self, articles_data: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
         Deduplicate translation pairs to avoid exporting the same content twice.
+
+        NOTE: This method is now redundant if deduplicate_first=True in fetch_all_articles.
+        Kept for backward compatibility.
 
         Args:
             articles_data: List of article data dictionaries
