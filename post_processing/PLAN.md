@@ -17,7 +17,31 @@
   - Then, based on category hierarchy data, make item-subitem relation between pages that corresponding original category hierarchy
     - In the example above, page B should be sub-item of page A
   - Target databse id will be provided as an argument
-2. After creating categories, move Notion pages under corresponding categories
+
+2. After manually importing zip, get `page_id`s of imported pages.
+  - This process is done in `get_imported_page_ids.py` module.
+  - It takes `parent_page_ids` as an argument. The value should be string and may contain one parent_page_id such as `1q2w3e4r` or multiple parent_pagers_ids with comma separated such as `1q2w3e4r,5t6y7u8i`
+  - Get chilren page of given `parent_page_id` and get pages whose name starts with 'KB'.
+    - Ignore pages whose name doesn't start with 'KB'
+    - There may be many pages, so make sure to use pagination to get all pages.
+  - If multiple `parent_page_ids` are given, iterate this process per `parent_page_id`
+  - Output file is in CSV format, having `page_id`, `page_title` columns
+  - Output file name is `imported_page_ids_YYYYMMDD_hhmm.csv`, `YYYYMMDD_hhmm` is the date and time of execution
+
+3. Move imported pages to target datanbase
+  - This process is done in `move_pages_to_database.py` module.
+  - It takes two arguments: `target_database_id` and `pages_csv`
+    - `target_database_id` is string
+    - `page_csv` is string and filepath pointing to list of `page_id`s to be moved under the database
+      - make sure the CSV containing a column `page_id`
+  - Documentation of Notion's page move API is not publicly avaiable in this time. Please refer `docs/SPEC_PAGE_MOVE_API.md` for implementation details.
+    - Runtime argument `target_database_id` is `datatarget_id` in the document above. Therefore we have to get `database_source_id` to make page moves 
+  - All page move operations should be logged in a log file to check whether operations are executed
+    - If there are error open move operation, write down error messages as well for later trouble shoot
+
+
+4. After creating categories, move Notion pages under corresponding categories in target database
+  - The `page_id` of target database is given as a runtime argument
   - List of page_ids of Notion pages and category hierarchy is given through CSV file
   - Use `make-subitem` method to populate under its category
 
@@ -26,7 +50,7 @@
 - There are rate limit threshold in Notion side. When using threading, always make max_workers argument so that we can set the number of max_workers at runtime
 
 ### memos
-- 11/20
+- 11/20: fixed, need test
   - process time of category_organizer.py is much slower than expected. Need to improve logic
      - Searching parent item property everytime? Since target database is explicitly specified and we can assume its structure will not change during the execution, we don't have to search everytime.
      - Searching pages under databse takes time as number pages increase. Page id can be cached right after page creation, use it later as reference

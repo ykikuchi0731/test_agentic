@@ -117,13 +117,14 @@ class CommonCLI:
         return filters
 
     @staticmethod
-    def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
+    def setup_logging(verbose: bool = False, quiet: bool = False, log_prefix: str = 'migration') -> None:
         """
         Setup logging configuration based on verbosity flags.
 
         Args:
             verbose: Enable DEBUG level logging
             quiet: Enable ERROR level logging only
+            log_prefix: Prefix for log filename (e.g., 'migration', 'post_processing')
         """
         from pathlib import Path
         from datetime import datetime
@@ -141,7 +142,7 @@ class CommonCLI:
 
         # Create log file path with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file = log_dir / f'migration_{timestamp}.log'
+        log_file = log_dir / f'{log_prefix}_{timestamp}.log'
 
         # Configure logging to both file and console
         logging.basicConfig(
