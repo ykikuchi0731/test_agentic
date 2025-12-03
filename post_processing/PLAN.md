@@ -35,15 +35,26 @@
     - `page_csv` is string and filepath pointing to list of `page_id`s to be moved under the database
       - make sure the CSV containing a column `page_id`
   - Documentation of Notion's page move API is not publicly avaiable in this time. Please refer `docs/SPEC_PAGE_MOVE_API.md` for implementation details.
-    - Runtime argument `target_database_id` is `datatarget_id` in the document above. Therefore we have to get `database_source_id` to make page moves 
+    - Runtime argument `target_database_id` is `database_id` in the document above. Therefore we have to get `database_source_id` to make page moves 
   - All page move operations should be logged in a log file to check whether operations are executed
     - If there are error open move operation, write down error messages as well for later trouble shoot
 
-
 4. After creating categories, move Notion pages under corresponding categories in target database
-  - The `page_id` of target database is given as a runtime argument
-  - List of page_ids of Notion pages and category hierarchy is given through CSV file
-  - Use `make-subitem` method to populate under its category
+  - This process is done in `categorize_pages.py` module.
+  - It takes 3 argements: `database_id`, `page_list_csv` and `category_list_csv`.
+    - Shorthand name for these arguments are `db`, `pl` and `cl` respectively
+  - Argument `database_id` is string, id of target Notion database
+  - Argument `page_list_csv` is string, path to CSV file
+    - The CSV file must have `page_id` and `category_path` columns.
+  - Argument `category_list_csv` is string, path to another CSV file
+    - This CSV file must have `full_path` and `page_id` columns.
+  - The `categorize_pages.py` module will work as following:
+    - Iterate lines in `page_list_csv` and get `page_id` and `category_path` values
+    - Search `category_path` in column `full_path` of `category_list_csv` and get corresponding `page_id` in `category_list_csv`
+      - To avoid confusing 2 `page_id`s, `page_id` from `category_list_csv` should be called `category_page_id`
+    - Make `page_id` from `page_list_csv` sub-item of `category_page_id`
+      - Use `make-subitem` method to populate under its category
+  - Execution log will be outputed under `logs` directory
 
 ## Performance concern
 - Use threading to concurrently execute Notion API

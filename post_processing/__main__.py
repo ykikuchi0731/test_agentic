@@ -6,11 +6,13 @@ Usage:
     python -m post_processing make-subitem --child <id> --parent <id>
     python -m post_processing get-imported-pages --parent-pages <id1>,<id2>
     python -m post_processing move-pages --database <id> --pages-csv <file>
+    python -m post_processing categorize-pages --pl <pages.csv> --cl <categories.csv> --database <id>
 
 Available commands:
     make-subitem        - Make a page a sub-item of another page
     get-imported-pages  - Get page IDs of imported KB pages
     move-pages          - Move pages to a target database
+    categorize-pages    - Categorize pages under category pages
 """
 import sys
 import argparse
@@ -24,6 +26,7 @@ from config import Config, ConfigurationError
 from post_processing.page_hierarchy import NotionPageHierarchy
 from post_processing.get_imported_page_ids import main as get_imported_pages_main
 from post_processing.move_pages_to_database import main as move_pages_main
+from post_processing.categorize_pages import main as categorize_pages_main
 
 import logging
 
@@ -128,6 +131,66 @@ def cmd_get_imported_pages(args):
     print("=" * 80)
     print(f"Output file: {output_path}")
     return 0
+
+
+def cmd_categorize_pages(args):
+    """Categorize pages by making them sub-items of category pages."""
+    print("=" * 80)
+    print("Categorize Pages")
+    print("=" * 80)
+
+    # Setup logging with module-specific prefix
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='post_processing_categorize_pages'
+    )
+
+    # Validate configuration
+    try:
+        Config.validate_notion()
+    except ConfigurationError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
+
+    logger.info(f"Page list CSV: {args.pl}")
+    logger.info(f"Category list CSV: {args.cl}")
+    logger.info(f"Database ID: {args.database}")
+    logger.info(f"Max workers: {args.workers}")
+
+    # Run main function
+    try:
+        results = categorize_pages_main(
+            page_list_csv=Path(args.pl),
+            category_list_csv=Path(args.cl),
+            database_id=args.database,
+            api_key=Config.NOTION_API_KEY,
+            max_workers=args.workers,
+            rate_limit_delay=args.rate_limit
+        )
+
+        # Calculate success/failure counts
+        success_count = sum(1 for r in results if r.get("success", False))
+        fail_count = len(results) - success_count
+
+        print("\n" + "=" * 80)
+        if fail_count == 0:
+            print("✅ All pages categorized successfully!")
+        elif success_count == 0:
+            print("❌ All categorization operations failed!")
+        else:
+            print("⚠️  Categorization completed with some failures")
+        print("=" * 80)
+        print(f"Total pages: {len(results)}")
+        print(f"Success: {success_count}")
+        print(f"Failed: {fail_count}")
+
+        # Return non-zero exit code if there were failures
+        return 1 if fail_count > 0 else 0
+    except Exception as e:
+        logger.error(f"Categorization operation failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
 
 
 def cmd_make_subitem(args):
@@ -284,6 +347,56 @@ def main():
         help='Minimal output (errors only)'
     )
     imported_parser.set_defaults(func=cmd_get_imported_pages)
+
+    # Categorize pages command
+    categorize_parser = subparsers.add_parser(
+        'categorize-pages',
+        help='Categorize pages by moving them under category pages',
+        description='Make imported pages sub-items of their corresponding category pages'
+    )
+    categorize_parser.add_argument(
+        '--pl',
+        required=True,
+        metavar='FILE',
+        help='Page list CSV file (must have page_id and category_path columns)'
+    )
+    categorize_parser.add_argument(
+        '--cl',
+        required=True,
+        metavar='FILE',
+        help='Category list CSV file (must have full_path and page_id columns)'
+    )
+    categorize_parser.add_argument(
+        '--database',
+        required=True,
+        metavar='DATABASE_ID',
+        help='Database ID where pages and categories exist'
+    )
+    categorize_parser.add_argument(
+        '--workers',
+        type=int,
+        default=4,
+        metavar='N',
+        help='Number of concurrent workers (default: 4)'
+    )
+    categorize_parser.add_argument(
+        '--rate-limit',
+        type=float,
+        default=0.1,
+        metavar='SECONDS',
+        help='Delay between requests in seconds (default: 0.1)'
+    )
+    categorize_parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    categorize_parser.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='Minimal output (errors only)'
+    )
+    categorize_parser.set_defaults(func=cmd_categorize_pages)
 
     # Make subitem command
     subitem_parser = subparsers.add_parser(
