@@ -171,40 +171,60 @@ class ArticleFetcher:
 
             merged_groups.append(group)
 
-        # Second pass: Keep only first article from each group
-        seen_sys_ids = set()
-        deduplicated = []
+        # Second pass: For each group, prefer the original article over translations
+        # Build article lookup by sys_id
+        article_lookup = {article.get("sys_id"): article for article in articles}
 
-        for article in articles:
-            article_sys_id = article.get("sys_id")
+        # For each group, select the best representative
+        selected_sys_ids = set()
 
-            if article_sys_id in seen_sys_ids:
-                logger.debug(
-                    f"Skipping {article.get('number')} - already processed as translation"
-                )
-                continue
+        for group in merged_groups:
+            # Find the original article (one without parent or translated_from)
+            original_article = None
+            fallback_article = None
 
-            # Find which group this article belongs to
-            article_group = None
-            for group in merged_groups:
-                if article_sys_id in group:
-                    article_group = group
+            for sys_id in group:
+                article = article_lookup.get(sys_id)
+                if not article:
+                    continue
+
+                # Store first article as fallback
+                if fallback_article is None:
+                    fallback_article = article
+
+                # Check if this is an original (not a translation)
+                parent = article.get("parent")
+                translated_from = article.get("translated_from")
+
+                # Handle parent/translated_from as dict or string
+                if isinstance(parent, dict):
+                    parent = parent.get("value")
+                if isinstance(translated_from, dict):
+                    translated_from = translated_from.get("value")
+
+                # If no parent and no translated_from, this is the original
+                if not parent and not translated_from:
+                    original_article = article
                     break
 
-            if article_group:
-                # Mark entire group as seen
-                seen_sys_ids.update(article_group)
+            # Use original if found, otherwise use fallback
+            selected_article = original_article or fallback_article
+            if selected_article:
+                selected_sys_ids.add(selected_article.get("sys_id"))
 
-                if len(article_group) > 1:
+                if len(group) > 1:
+                    article_type = "original" if original_article else "first available"
                     logger.debug(
-                        f"Keeping {article.get('number')} as representative of translation group "
-                        f"with {len(article_group)} articles"
+                        f"Translation group with {len(group)} articles: "
+                        f"keeping {selected_article.get('number')} ({article_type})"
                     )
-            else:
-                # No translation group - single article
-                seen_sys_ids.add(article_sys_id)
 
-            deduplicated.append(article)
+        # Third pass: Build deduplicated list maintaining original order
+        deduplicated = []
+        for article in articles:
+            article_sys_id = article.get("sys_id")
+            if article_sys_id in selected_sys_ids:
+                deduplicated.append(article)
 
         logger.info(f"Early deduplication: {len(articles)} -> {len(deduplicated)} articles")
         return deduplicated

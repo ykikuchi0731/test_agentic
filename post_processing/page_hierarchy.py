@@ -119,6 +119,9 @@ class NotionPageHierarchy:
             database = self.get_database(database_id)
             properties = database.get("properties", {})
 
+            # Normalize database ID for comparison (remove hyphens)
+            normalized_database_id = database_id.replace("-", "")
+
             # Look for a relation property that is a self-relation
             # and has a name like "Parent item" or "Parent"
             for prop_name, prop_config in properties.items():
@@ -126,7 +129,10 @@ class NotionPageHierarchy:
                     relation_config = prop_config.get("relation", {})
 
                     # Check if it's a self-relation (points to same database)
-                    if relation_config.get("database_id") == database_id:
+                    # Normalize both IDs by removing hyphens before comparison
+                    relation_db_id = relation_config.get("database_id", "").replace("-", "")
+
+                    if relation_db_id == normalized_database_id:
                         # Check if it's the parent property (usually has dual_property for sub-items)
                         # The "Parent item" property has a corresponding "Sub-items" property
                         if "Parent" in prop_name or prop_name == "Parent item":
