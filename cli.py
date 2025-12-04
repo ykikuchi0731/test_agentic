@@ -12,6 +12,7 @@ Available commands:
     export-list        - Export article list with metadata (CSV/JSON)
     export-categories  - Export category hierarchy (JSON/CSV)
     process-iframes    - Process iframes in article HTML
+    convert-tables     - Convert tables with images to column blocks
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -256,6 +257,60 @@ def cmd_process_iframes(args):
     print("Note: Full implementation requires article HTML content")
     print("Use 'migrate' command with --process-iframes flag for full iframe processing")
     return 0
+
+
+def cmd_convert_tables(args):
+    """Convert tables with images to Notion column blocks."""
+    from pre_processing.convert_table_column import main as convert_tables_main
+
+    print_separator("Convert Tables to Column Blocks")
+
+    # Setup logging
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False)
+    )
+
+    directory = Path(args.directory)
+
+    if not directory.exists():
+        logger.error(f"Directory not found: {directory}")
+        return 1
+
+    if not directory.is_dir():
+        logger.error(f"Path is not a directory: {directory}")
+        return 1
+
+    logger.info(f"Directory: {directory}")
+    logger.info(f"Recursive: {args.recursive}")
+    logger.info(f"Dry run: {args.dry_run}")
+
+    try:
+        stats = convert_tables_main(
+            directory=directory,
+            recursive=args.recursive,
+            dry_run=args.dry_run
+        )
+
+        print("\n" + "=" * 80)
+        if args.dry_run:
+            print("DRY RUN - No files were modified")
+        elif stats['files_modified'] > 0:
+            print("✅ Conversion completed!")
+        else:
+            print("No tables with images found")
+        print("=" * 80)
+        print(f"Files scanned:    {stats['files_scanned']}")
+        print(f"Files modified:   {stats['files_modified']}")
+        print(f"Tables converted: {stats['tables_converted']}")
+        print(f"Tables skipped:   {stats['tables_skipped']}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Conversion failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
 
 
 def cmd_make_subitem(args):
@@ -573,6 +628,28 @@ def main():
         help='Article number to process (e.g., KB0001)'
     )
     iframe_parser.set_defaults(func=cmd_process_iframes)
+
+    # =================================================================
+    # Convert tables command
+    # =================================================================
+    convert_parser = subparsers.add_parser(
+        'convert-tables',
+        help='Convert tables with images to Notion column blocks',
+        description='Scan HTML files and convert tables containing images to column blocks'
+    )
+    CommonCLI.add_common_args(convert_parser)
+    convert_parser.add_argument(
+        '--directory',
+        required=True,
+        metavar='PATH',
+        help='Directory containing HTML files to process'
+    )
+    convert_parser.add_argument(
+        '--recursive',
+        action='store_true',
+        help='Process subdirectories recursively'
+    )
+    convert_parser.set_defaults(func=cmd_convert_tables)
 
     # =================================================================
     # Make subitem command
