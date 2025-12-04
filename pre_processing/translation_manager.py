@@ -116,6 +116,7 @@ class TranslationManager:
     ) -> str:
         """
         Merge original article and translations into single HTML.
+        Each language version is wrapped in <details> element.
         Japanese content first, then other languages.
 
         Args:
@@ -137,23 +138,21 @@ class TranslationManager:
         # Sort by language: ja first, then en, then others
         all_articles.sort(key=self._lang_sort_key)
 
-        # Create merged HTML
+        # Create merged HTML with details elements
         merged_parts = []
-        for i, (lang, html) in enumerate(all_articles):
+        for lang, html in all_articles:
             # Language should always be set (defaults to 'ja' in _extract_language)
             lang_code = lang if lang else "ja"
             lang_name = self.LANG_NAMES.get(lang_code, lang_code.upper())
 
             merged_parts.extend([
+                '<details>',
+                f'<summary>{lang_name}</summary>',
                 f'<div class="article-section" data-language="{lang_code}">',
-                f'<h2 class="language-header">{lang_name}</h2>',
                 html,
-                '</div>'
+                '</div>',
+                '</details>'
             ])
-
-            # Add separator between sections
-            if i < len(all_articles) - 1:
-                merged_parts.append('<hr class="language-separator" />')
 
         return "\n".join(merged_parts)
 
