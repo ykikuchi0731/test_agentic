@@ -2,7 +2,7 @@
 - This process is done in `scan_div_accshow.py`
 - Scan a folder recursively to get htmls
 - Search for elements that are not visible after rendering because of style settings in each html
-  - `div` elements with `accshow` class
+  - `div` elements with `accshow` class that are configured to be invisible by style setting
 - Report these htmls and elements in CSV format
 
 # Scan unneccessary lines

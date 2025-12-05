@@ -171,11 +171,35 @@ class DivAccshowScanner:
 
         return (False, '')
 
+    def check_inline_style(self, element: Tag) -> Tuple[bool, str]:
+        """
+        Check if element has inline style that makes it invisible.
+
+        Args:
+            element: BeautifulSoup Tag element
+
+        Returns:
+            Tuple of (is_invisible: bool, reason: str)
+        """
+        style = element.get('style', '')
+        if not style:
+            return (False, '')
+
+        style_lower = style.lower()
+
+        # Check each invisible style pattern
+        for pattern, reason in self.INVISIBLE_STYLES:
+            if re.search(pattern, style_lower):
+                return (True, f'inline_style:{reason}')
+
+        return (False, '')
+
     def is_invisible(self, element: Tag, css_rules: Dict[str, Set[str]]) -> Tuple[bool, str]:
         """
         Check if an element is invisible due to CSS styles.
 
         Specifically targets <div> elements with class 'accshow' that are invisible.
+        Checks both CSS rules from <style> tags AND inline styles.
 
         Args:
             element: BeautifulSoup Tag element
@@ -197,8 +221,13 @@ class DivAccshowScanner:
         if 'accshow' not in class_list:
             return (False, '')
 
-        # Now check if this accshow div is invisible via CSS rules
+        # Check if this accshow div is invisible via CSS rules
         is_hidden, reason = self.check_css_rules(element, css_rules)
+        if is_hidden:
+            return (True, reason)
+
+        # Check if this accshow div is invisible via inline style
+        is_hidden, reason = self.check_inline_style(element)
         if is_hidden:
             return (True, reason)
 

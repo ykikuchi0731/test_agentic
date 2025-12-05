@@ -338,7 +338,7 @@ def cmd_scan_invisible(args):
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = Path('analysis_output')
         output_dir.mkdir(exist_ok=True)
-        output_csv = output_dir / f'invisible_elements_{timestamp}.csv'
+        output_csv = output_dir / f'div_accshow_{timestamp}.csv'
 
     if not directory.exists():
         logger.error(f"Directory not found: {directory}")
