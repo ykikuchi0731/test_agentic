@@ -1,8 +1,9 @@
-"""Scan HTML files for invisible elements due to CSS style settings.
+"""Scan HTML files for invisible <div class="accshow"> elements.
 
-This module scans HTML files and identifies elements that are not visible after rendering
-because of CSS properties like display:none, visibility:hidden, opacity:0, etc.
-This includes both inline styles and CSS rules defined in <style> tags.
+This module scans HTML files and identifies <div> elements with class 'accshow'
+that are not visible after rendering due to CSS rules defined in <style> tags.
+These are typically accordion-style widgets that are initially hidden.
+
 Results are reported in CSV format.
 """
 import logging
@@ -16,18 +17,19 @@ import tinycss2
 logger = logging.getLogger(__name__)
 
 
-class InvisibleElementScanner:
+class DivAccshowScanner:
     """
-    Scan HTML files for elements that are invisible due to CSS styles.
+    Scan HTML files for invisible <div> elements with class 'accshow'.
 
-    This scanner identifies elements that won't be visible when rendered due to:
+    This scanner specifically targets accordion-style content that is initially
+    hidden via CSS rules. These are typically <div class="accshow"> elements
+    that are invisible due to CSS properties like:
+    - opacity: 0
+    - height: 0 (combined with overflow: hidden)
     - display: none
     - visibility: hidden
-    - opacity: 0
-    - height: 0 or width: 0 (combined with overflow: hidden)
-    - Hidden attribute
 
-    Checks both inline styles and CSS rules from <style> tags.
+    Checks CSS rules from <style> tags to determine visibility.
     """
 
     # CSS properties that make elements invisible
@@ -173,6 +175,8 @@ class InvisibleElementScanner:
         """
         Check if an element is invisible due to CSS styles.
 
+        Specifically targets <div> elements with class 'accshow' that are invisible.
+
         Args:
             element: BeautifulSoup Tag element
             css_rules: Dictionary of CSS rules from parse_css_rules
@@ -180,29 +184,20 @@ class InvisibleElementScanner:
         Returns:
             Tuple of (is_invisible: bool, reason: str)
         """
-        # Check for hidden attribute
-        if element.has_attr('hidden'):
-            return (True, 'hidden_attribute')
+        # Only check <div> elements with 'accshow' class
+        if element.name != 'div':
+            return (False, '')
 
-        # Check inline style attribute
-        style = element.get('style', '')
-        if style:
-            style_lower = style.lower()
-            for pattern, reason in self.INVISIBLE_STYLES:
-                if re.search(pattern, style_lower):
-                    return (True, f'inline:{reason}')
-
-        # Check class attribute for common hidden class names
         classes = element.get('class', [])
         if isinstance(classes, list):
-            class_str = ' '.join(classes).lower()
+            class_list = classes
         else:
-            class_str = str(classes).lower()
+            class_list = [classes] if classes else []
 
-        if any(keyword in class_str for keyword in ['hidden', 'invisible', 'd-none']):
-            return (True, f'class:{class_str}')
+        if 'accshow' not in class_list:
+            return (False, '')
 
-        # Check CSS rules
+        # Now check if this accshow div is invisible via CSS rules
         is_hidden, reason = self.check_css_rules(element, css_rules)
         if is_hidden:
             return (True, reason)
@@ -426,7 +421,7 @@ def main(
     recursive: bool = False
 ) -> Dict[str, int]:
     """
-    Main function to scan HTML files for invisible elements.
+    Main function to scan HTML files for invisible <div class="accshow"> elements.
 
     Args:
         directory: Path to directory containing HTML files
@@ -436,7 +431,7 @@ def main(
     Returns:
         Statistics dictionary
     """
-    scanner = InvisibleElementScanner()
+    scanner = DivAccshowScanner()
     scanner.process_directory(directory, recursive=recursive)
     scanner.write_csv_report(output_csv)
     return scanner.stats

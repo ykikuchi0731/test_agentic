@@ -13,7 +13,7 @@ Available commands:
     export-categories  - Export category hierarchy (JSON/CSV)
     process-iframes    - Process iframes in article HTML
     convert-tables     - Convert tables with images to column blocks
-    scan-invisible     - Scan HTML files for invisible elements
+    scan-div-accshow   - Scan HTML files for invisible div.accshow elements
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -315,8 +315,8 @@ def cmd_convert_tables(args):
 
 
 def cmd_scan_invisible(args):
-    """Scan HTML files for invisible elements."""
-    from page_checks.scan_invisible_elements import main as scan_invisible_main
+    """Scan HTML files for invisible div.accshow elements."""
+    from page_checks.scan_div_accshow import main as scan_invisible_main
     from datetime import datetime
 
     print_separator("Scan Invisible Elements")
@@ -716,12 +716,12 @@ def main():
     convert_parser.set_defaults(func=cmd_convert_tables)
 
     # =================================================================
-    # Scan invisible elements command
+    # Scan div.accshow elements command
     # =================================================================
     scan_parser = subparsers.add_parser(
-        'scan-invisible',
-        help='Scan HTML files for invisible elements',
-        description='Identify elements that are invisible due to CSS styles and report in CSV'
+        'scan-div-accshow',
+        help='Scan HTML files for invisible div.accshow elements',
+        description='Identify <div class="accshow"> elements that are invisible due to CSS rules'
     )
     CommonCLI.add_common_args(scan_parser)
     scan_parser.add_argument(
