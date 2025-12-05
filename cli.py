@@ -14,6 +14,7 @@ Available commands:
     process-iframes    - Process iframes in article HTML
     convert-tables     - Convert tables with images to column blocks
     scan-div-accshow   - Scan HTML files for invisible div.accshow elements
+    scan-empty-wrappers - Scan HTML files for empty list wrapper elements
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -367,6 +368,74 @@ def cmd_scan_invisible(args):
         print(f"Files scanned:        {stats['files_scanned']}")
         print(f"Files with invisible: {stats['files_with_invisible']}")
         print(f"Invisible elements:   {stats['invisible_elements']}")
+        print(f"\n📄 Report saved to: {output_csv}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Scan failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
+
+
+def cmd_scan_empty_wrappers(args):
+    """Scan HTML files for empty list wrapper elements."""
+    from page_checks.scan_empty_list_wrappers import main as scan_wrappers_main
+    from datetime import datetime
+
+    print_separator("Scan Empty List Wrappers")
+
+    # Setup logging
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='scan_empty_wrappers'
+    )
+
+    directory = Path(args.directory)
+
+    # Use --output if provided, otherwise generate default filename in analysis_output
+    if args.output:
+        output_csv = Path(args.output)
+    else:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = Path('analysis_output')
+        output_dir.mkdir(exist_ok=True)
+        output_csv = output_dir / f'empty_list_wrappers_{timestamp}.csv'
+
+    if not directory.exists():
+        logger.error(f"Directory not found: {directory}")
+        return 1
+
+    if not directory.is_dir():
+        logger.error(f"Path is not a directory: {directory}")
+        return 1
+
+    logger.info(f"Directory: {directory}")
+    logger.info(f"Output CSV: {output_csv}")
+    logger.info(f"Recursive: {args.recursive}")
+    logger.info(f"Min nesting depth: {args.min_depth}")
+    logger.info(f"Min wrapper count: {args.min_count}")
+
+    try:
+        stats = scan_wrappers_main(
+            directory=directory,
+            output_csv=output_csv,
+            recursive=args.recursive,
+            min_nesting_depth=args.min_depth,
+            min_wrapper_count=args.min_count
+        )
+
+        print("\n" + "=" * 80)
+        if stats['total_empty_wrappers'] > 0:
+            print("✅ Scan completed!")
+        else:
+            print("No empty list wrappers found")
+        print("=" * 80)
+        print(f"Files scanned:        {stats['files_scanned']}")
+        print(f"Files with wrappers:  {stats['files_with_wrappers']}")
+        print(f"Wrapper chains:       {stats['total_wrapper_chains']}")
+        print(f"Total empty wrappers: {stats['total_empty_wrappers']}")
         print(f"\n📄 Report saved to: {output_csv}")
 
         return 0
@@ -737,6 +806,43 @@ def main():
         help='Do not process subdirectories (recursive is default)'
     )
     scan_parser.set_defaults(func=cmd_scan_invisible, recursive=True)
+
+    # =================================================================
+    # Scan empty list wrappers command
+    # =================================================================
+    wrappers_parser = subparsers.add_parser(
+        'scan-empty-wrappers',
+        help='Scan HTML files for empty list wrapper elements',
+        description='Identify nested <li> wrapper elements that cause blank lines in Notion'
+    )
+    CommonCLI.add_common_args(wrappers_parser)
+    wrappers_parser.add_argument(
+        '--directory',
+        required=True,
+        metavar='PATH',
+        help='Directory containing HTML files to scan'
+    )
+    wrappers_parser.add_argument(
+        '--no-recursive',
+        dest='recursive',
+        action='store_false',
+        help='Do not process subdirectories (recursive is default)'
+    )
+    wrappers_parser.add_argument(
+        '--min-depth',
+        type=int,
+        default=2,
+        metavar='N',
+        help='Minimum nesting depth to report (default: 2)'
+    )
+    wrappers_parser.add_argument(
+        '--min-count',
+        type=int,
+        default=3,
+        metavar='N',
+        help='Minimum empty wrappers per file to report (default: 3)'
+    )
+    wrappers_parser.set_defaults(func=cmd_scan_empty_wrappers, recursive=True)
 
     # =================================================================
     # Make subitem command
