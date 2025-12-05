@@ -13,6 +13,7 @@ Available commands:
     export-categories  - Export category hierarchy (JSON/CSV)
     process-iframes    - Process iframes in article HTML
     convert-tables     - Convert tables with images to column blocks
+    scan-invisible     - Scan HTML files for invisible elements
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -309,6 +310,69 @@ def cmd_convert_tables(args):
 
     except Exception as e:
         logger.error(f"Conversion failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
+
+
+def cmd_scan_invisible(args):
+    """Scan HTML files for invisible elements."""
+    from page_checks.scan_invisible_elements import main as scan_invisible_main
+    from datetime import datetime
+
+    print_separator("Scan Invisible Elements")
+
+    # Setup logging
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='scan_invisible'
+    )
+
+    directory = Path(args.directory)
+
+    # Use --output if provided, otherwise generate default filename in analysis_output
+    if args.output:
+        output_csv = Path(args.output)
+    else:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = Path('analysis_output')
+        output_dir.mkdir(exist_ok=True)
+        output_csv = output_dir / f'invisible_elements_{timestamp}.csv'
+
+    if not directory.exists():
+        logger.error(f"Directory not found: {directory}")
+        return 1
+
+    if not directory.is_dir():
+        logger.error(f"Path is not a directory: {directory}")
+        return 1
+
+    logger.info(f"Directory: {directory}")
+    logger.info(f"Output CSV: {output_csv}")
+    logger.info(f"Recursive: {args.recursive}")
+
+    try:
+        stats = scan_invisible_main(
+            directory=directory,
+            output_csv=output_csv,
+            recursive=args.recursive
+        )
+
+        print("\n" + "=" * 80)
+        if stats['invisible_elements'] > 0:
+            print("✅ Scan completed!")
+        else:
+            print("No invisible elements found")
+        print("=" * 80)
+        print(f"Files scanned:        {stats['files_scanned']}")
+        print(f"Files with invisible: {stats['files_with_invisible']}")
+        print(f"Invisible elements:   {stats['invisible_elements']}")
+        print(f"\n📄 Report saved to: {output_csv}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Scan failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
         return 1
 
@@ -650,6 +714,29 @@ def main():
         help='Process subdirectories recursively'
     )
     convert_parser.set_defaults(func=cmd_convert_tables)
+
+    # =================================================================
+    # Scan invisible elements command
+    # =================================================================
+    scan_parser = subparsers.add_parser(
+        'scan-invisible',
+        help='Scan HTML files for invisible elements',
+        description='Identify elements that are invisible due to CSS styles and report in CSV'
+    )
+    CommonCLI.add_common_args(scan_parser)
+    scan_parser.add_argument(
+        '--directory',
+        required=True,
+        metavar='PATH',
+        help='Directory containing HTML files to scan'
+    )
+    scan_parser.add_argument(
+        '--no-recursive',
+        dest='recursive',
+        action='store_false',
+        help='Do not process subdirectories (recursive is default)'
+    )
+    scan_parser.set_defaults(func=cmd_scan_invisible, recursive=True)
 
     # =================================================================
     # Make subitem command
