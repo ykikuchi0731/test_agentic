@@ -29,6 +29,7 @@ wheels/
 # Downloaded files and outputs
 downloads/
 migration_output/
+analysis_output/
 output/
 test_exports/
 logs/
