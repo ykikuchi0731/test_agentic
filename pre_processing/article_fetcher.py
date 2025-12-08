@@ -293,12 +293,16 @@ class ArticleFetcher:
             if category_filter and category_filter.lower() not in category_path_str.lower():
                 continue
 
-            # Check exclude filter
-            if exclude_category and exclude_category.lower() in category_path_str.lower():
-                logger.info(
-                    f"Excluding article {article.get('number', '')} from category: {category_path_str}"
-                )
-                continue
+            # Check exclude filter - match as complete category name, not substring
+            if exclude_category:
+                # Split category path into individual category names
+                categories = [cat.get("label", "") for cat in category_path]
+                # Check if exclude_category matches any complete category name (case-insensitive)
+                if any(exclude_category.lower() == cat.lower() for cat in categories):
+                    logger.info(
+                        f"Excluding article {article.get('number', '')} from category: {category_path_str}"
+                    )
+                    continue
 
             filtered.append(article)
 
