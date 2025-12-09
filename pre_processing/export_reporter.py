@@ -166,6 +166,15 @@ class ExportReporter:
         return docs_count, slides_count, urls_str
 
     @staticmethod
+    def _extract_doc_urls(docs_downloaded: List) -> str:
+        """Extract Google Docs URLs from docs_downloaded list."""
+        urls = []
+        for doc in docs_downloaded:
+            if isinstance(doc, dict) and "doc_url" in doc:
+                urls.append(doc["doc_url"])
+        return "; ".join(urls) if urls else ""
+
+    @staticmethod
     def _extract_category_labels(category_path: List) -> List[str]:
         """Extract category labels from category path."""
         labels = []
@@ -283,8 +292,12 @@ class ExportReporter:
 
         # Row for original article
         original_summary = iframe_result.get('original', {}).get('summary', {})
-        original_docs_count = len(original_summary.get('docs_downloaded', [])) if original_summary else 0
+        original_docs_downloaded = original_summary.get('docs_downloaded', []) if original_summary else []
+        original_docs_count = len(original_docs_downloaded)
         original_slides_count = len(original_summary.get('slides_converted', [])) if original_summary else 0
+
+        # Extract Google Docs URLs from original
+        original_docs_urls = ExportReporter._extract_doc_urls(original_docs_downloaded)
 
         rows.append({
             "article_number": article.get("number", ""),
@@ -299,6 +312,7 @@ class ExportReporter:
             "attachments_count": len(attachments),
             "has_iframes": "Yes",
             "google_docs_downloaded": original_docs_count,
+            "google_docs_urls": original_docs_urls,
             "google_slides_converted": original_slides_count,
             "requires_special_handling": "Yes" if article_data.get("requires_special_handling") else "No",
             "special_handling_flag": article_data.get("special_handling_flag", ""),
@@ -313,8 +327,12 @@ class ExportReporter:
             if i < len(translations):
                 trans = translations[i]
                 trans_summary = trans_result.get('summary', {})
-                trans_docs_count = len(trans_summary.get('docs_downloaded', [])) if trans_summary else 0
+                trans_docs_downloaded = trans_summary.get('docs_downloaded', []) if trans_summary else []
+                trans_docs_count = len(trans_docs_downloaded)
                 trans_slides_count = len(trans_summary.get('slides_converted', [])) if trans_summary else 0
+
+                # Extract Google Docs URLs from translation
+                trans_docs_urls = ExportReporter._extract_doc_urls(trans_docs_downloaded)
 
                 rows.append({
                     "article_number": trans.get("number", ""),
@@ -329,6 +347,7 @@ class ExportReporter:
                     "attachments_count": 0,  # Attachments are only listed with original
                     "has_iframes": "Yes",
                     "google_docs_downloaded": trans_docs_count,
+                    "google_docs_urls": trans_docs_urls,
                     "google_slides_converted": trans_slides_count,
                     "requires_special_handling": "No",
                     "special_handling_flag": "",
