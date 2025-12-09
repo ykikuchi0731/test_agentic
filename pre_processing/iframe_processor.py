@@ -186,51 +186,28 @@ class IframeProcessor:
             return result
 
         try:
-            # First, download without custom filename to get the actual Google Doc title
+            # Download Google Doc with its original name (don't rename)
             logger.info(
                 f"Downloading Google Doc: {iframe_info['file_id']}"
             )
 
-            # Download using browser exporter (without custom filename to get actual title)
+            # Download using browser exporter (keeps original Google Doc title as filename)
             export_result = self.google_docs_exporter.export_single_document(
                 iframe_info["file_id"], output_filename=None
             )
 
-            # If download succeeded, rename using KB_NUMBER-ARTICLE_NAME format as per PLAN.md
+            # Log the download result with Google Doc link
             if export_result["success"]:
-                # Build filename: KB_NUMBER-ARTICLE_NAME.docx (using article info, not doc title)
-                safe_article_title = self._sanitize_filename(article_title)
+                doc_title = export_result.get("title", "Unknown")
+                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
+                downloaded_path = Path(export_result["file_path"])
 
-                if article_number:
-                    safe_number = self._sanitize_filename(article_number)
-                    if language_suffix:
-                        desired_filename = f"{safe_number}-{safe_article_title}{language_suffix}.docx"
-                    else:
-                        desired_filename = f"{safe_number}-{safe_article_title}.docx"
-                else:
-                    # Fallback if no article number provided
-                    if language_suffix:
-                        desired_filename = f"{safe_article_title}{language_suffix}.docx"
-                    else:
-                        desired_filename = f"{safe_article_title}.docx"
-
-                # Rename the downloaded file
-                original_path = Path(export_result["file_path"])
-                desired_path = original_path.parent / desired_filename
-
-                # Rename (overwrite if exists since same article shouldn't be processed twice)
-                if original_path != desired_path:
-                    if desired_path.exists():
-                        desired_path.unlink()  # Remove existing file
-                    original_path.rename(desired_path)
-                    export_result["file_path"] = str(desired_path)
-
-                    doc_title = export_result.get("title", "Unknown")
-                    logger.info(
-                        f"Renamed to: {desired_filename} | "
-                        f"Google Doc title: '{doc_title}' | "
-                        f"Article: {article_number} ({article_title})"
-                    )
+                logger.info(
+                    f"Downloaded Google Doc: '{doc_title}' | "
+                    f"File: {downloaded_path.name} | "
+                    f"URL: {doc_url} | "
+                    f"Article: {article_number} ({article_title})"
+                )
 
             # Build context for logging
             article_context = f"Article: {article_number or 'unknown'}"
@@ -471,7 +448,13 @@ class IframeProcessor:
                     )
 
                     if result["success"]:
-                        summary["docs_downloaded"].append(result["file_path"])
+                        # Store both file path and Google Doc URL
+                        doc_info = {
+                            "file_path": result["file_path"],
+                            "doc_id": file_id,
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit"
+                        }
+                        summary["docs_downloaded"].append(doc_info)
                         downloaded_doc_ids.add(file_id)  # Mark as downloaded
 
                         # Remove iframe from HTML if download successful
