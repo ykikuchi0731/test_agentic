@@ -14,6 +14,7 @@
 - Some articles may contain `<iframe>` elements. Since Notion importer doesn't support `<iframe>`, we will edit htmls containing `<iframe>` as follows:
   - If source of `<iframe>` points to Google Documents, download that Google Documents in form of `.docx` instead of downloading HTML
     - In this case, we will download original and translated version separatly and don't merge them
+    - Names of downloaded docx is in similar format of htmls, that is KB_NUMBER_ARTICLE_NAME.
   - If source of `<iframe>` points to URLs other than Google Documents, edit `<iframe>` to `<a>` element and set `href` property to that URL
 - Download of Google Documents will be done through browser and automation tool, Selenium
   - Google Documents can be accessible only from OAuth2. Ask users to enter credentials for authentication

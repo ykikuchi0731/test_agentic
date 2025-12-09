@@ -191,41 +191,46 @@ class IframeProcessor:
                 f"Downloading Google Doc: {iframe_info['file_id']}"
             )
 
-            # Download using browser exporter (without custom filename)
+            # Download using browser exporter (without custom filename to get actual title)
             export_result = self.google_docs_exporter.export_single_document(
                 iframe_info["file_id"], output_filename=None
             )
 
-            # If download succeeded and we have the actual doc title, rename using it
-            if export_result["success"] and export_result.get("title"):
-                doc_title = export_result["title"]
-                safe_doc_title = self._sanitize_filename(doc_title)
+            # If download succeeded, rename using KB_NUMBER-ARTICLE_NAME format as per PLAN.md
+            if export_result["success"]:
+                # Build filename: KB_NUMBER-ARTICLE_NAME.docx (using article info, not doc title)
+                safe_article_title = self._sanitize_filename(article_title)
 
-                # Build filename with article number prefix and actual doc title
                 if article_number:
                     safe_number = self._sanitize_filename(article_number)
                     if language_suffix:
-                        desired_filename = f"{safe_number}-{safe_doc_title}{language_suffix}.docx"
+                        desired_filename = f"{safe_number}-{safe_article_title}{language_suffix}.docx"
                     else:
-                        desired_filename = f"{safe_number}-{safe_doc_title}.docx"
+                        desired_filename = f"{safe_number}-{safe_article_title}.docx"
                 else:
-                    # Fallback to old pattern if no article number provided
+                    # Fallback if no article number provided
                     if language_suffix:
-                        desired_filename = f"{safe_doc_title}{language_suffix}.docx"
+                        desired_filename = f"{safe_article_title}{language_suffix}.docx"
                     else:
-                        desired_filename = f"{safe_doc_title}.docx"
+                        desired_filename = f"{safe_article_title}.docx"
 
-                # Rename the downloaded file to use the desired filename
+                # Rename the downloaded file
                 original_path = Path(export_result["file_path"])
                 desired_path = original_path.parent / desired_filename
 
-                # If desired file already exists, don't rename (keep the browser's default)
-                if not desired_path.exists():
+                # Rename (overwrite if exists since same article shouldn't be processed twice)
+                if original_path != desired_path:
+                    if desired_path.exists():
+                        desired_path.unlink()  # Remove existing file
                     original_path.rename(desired_path)
                     export_result["file_path"] = str(desired_path)
-                    logger.info(f"Renamed to: {desired_filename} (using actual doc title: {doc_title})")
-                else:
-                    logger.info(f"File already exists at {desired_path}, keeping downloaded file as: {original_path.name}")
+
+                    doc_title = export_result.get("title", "Unknown")
+                    logger.info(
+                        f"Renamed to: {desired_filename} | "
+                        f"Google Doc title: '{doc_title}' | "
+                        f"Article: {article_number} ({article_title})"
+                    )
 
             # Build context for logging
             article_context = f"Article: {article_number or 'unknown'}"
@@ -246,8 +251,7 @@ class IframeProcessor:
                 result["error"] = export_result.get("error", "Unknown error")
                 logger.error(
                     f"❌ Failed to download Google Doc: {result['error']} | "
-                    f"{article_context} | {doc_context} | "
-                    f"Target filename: {filename}"
+                    f"{article_context} | {doc_context}"
                 )
 
         except Exception as e:
