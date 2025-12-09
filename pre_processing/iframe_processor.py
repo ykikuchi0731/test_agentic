@@ -186,31 +186,46 @@ class IframeProcessor:
             return result
 
         try:
-            # Sanitize article title for filename
-            safe_filename = self._sanitize_filename(article_title)
-
-            # Build filename with article number prefix if provided (matching HTML export pattern)
-            if article_number:
-                safe_number = self._sanitize_filename(article_number)
-                if language_suffix:
-                    filename = f"{safe_number}-{safe_filename}{language_suffix}.docx"
-                else:
-                    filename = f"{safe_number}-{safe_filename}.docx"
-            else:
-                # Fallback to old pattern if no article number provided
-                if language_suffix:
-                    filename = f"{safe_filename}{language_suffix}.docx"
-                else:
-                    filename = f"{safe_filename}.docx"
-
+            # First, download without custom filename to get the actual Google Doc title
             logger.info(
-                f"Downloading Google Doc: {iframe_info['file_id']} as {filename}"
+                f"Downloading Google Doc: {iframe_info['file_id']}"
             )
 
-            # Download using browser exporter
+            # Download using browser exporter (without custom filename)
             export_result = self.google_docs_exporter.export_single_document(
-                iframe_info["file_id"], output_filename=filename
+                iframe_info["file_id"], output_filename=None
             )
+
+            # If download succeeded and we have the actual doc title, rename using it
+            if export_result["success"] and export_result.get("title"):
+                doc_title = export_result["title"]
+                safe_doc_title = self._sanitize_filename(doc_title)
+
+                # Build filename with article number prefix and actual doc title
+                if article_number:
+                    safe_number = self._sanitize_filename(article_number)
+                    if language_suffix:
+                        desired_filename = f"{safe_number}-{safe_doc_title}{language_suffix}.docx"
+                    else:
+                        desired_filename = f"{safe_number}-{safe_doc_title}.docx"
+                else:
+                    # Fallback to old pattern if no article number provided
+                    if language_suffix:
+                        desired_filename = f"{safe_doc_title}{language_suffix}.docx"
+                    else:
+                        desired_filename = f"{safe_doc_title}.docx"
+
+                # Rename the downloaded file to use the desired filename
+                original_path = Path(export_result["file_path"])
+                desired_path = original_path.parent / desired_filename
+
+                # If desired file already exists, don't rename (keep the browser's default)
+                if not desired_path.exists():
+                    original_path.rename(desired_path)
+                    export_result["file_path"] = str(desired_path)
+                    logger.info(f"Renamed to: {desired_filename} (using actual doc title: {doc_title})")
+                else:
+                    logger.info(f"File already exists at {desired_path}, keeping downloaded file as: {original_path.name}")
 
             # Build context for logging
             article_context = f"Article: {article_number or 'unknown'}"
