@@ -561,18 +561,19 @@ class ZipExporter:
         if original_docs:
             logger.info(f"Exporting {len(original_docs)} Google Docs for original article {article_number}")
 
-            for doc_path in original_docs:
+            for doc_info in original_docs:
+                # Handle both old format (string) and new format (dict)
+                doc_path = doc_info["file_path"] if isinstance(doc_info, dict) else doc_info
+
                 if not os.path.exists(doc_path):
                     logger.warning(f"Google Doc file not found: {doc_path}")
                     continue
 
-                # Generate filename: KBNUMBER-ARTICLENAME.docx
-                safe_number = self._sanitize_filename(article_number)
-                safe_title = self._sanitize_filename(article_title)
-                docx_filename = f"{safe_number}-{safe_title}.docx"
+                # Use original filename from the downloaded file
+                original_filename = os.path.basename(doc_path)
 
                 # Add to ZIP in same directory as HTMLs would go
-                zip_path = f"{root_folder}/{articles_folder}/{docx_filename}"
+                zip_path = f"{root_folder}/{articles_folder}/{original_filename}"
                 zf.write(doc_path, zip_path)
                 logger.info(f"Added Google Doc to ZIP: {zip_path}")
 
@@ -594,17 +595,18 @@ class ZipExporter:
 
             logger.info(f"Exporting {len(trans_docs)} Google Docs for translation {trans_number}")
 
-            for doc_path in trans_docs:
+            for doc_info in trans_docs:
+                # Handle both old format (string) and new format (dict)
+                doc_path = doc_info["file_path"] if isinstance(doc_info, dict) else doc_info
+
                 if not os.path.exists(doc_path):
                     logger.warning(f"Translation Google Doc file not found: {doc_path}")
                     continue
 
-                # Generate filename: KBNUMBER-ARTICLENAME.docx for each translation
-                safe_number = self._sanitize_filename(trans_number)
-                safe_title = self._sanitize_filename(trans_title)
-                docx_filename = f"{safe_number}-{safe_title}.docx"
+                # Use original filename from the downloaded file
+                original_filename = os.path.basename(doc_path)
 
                 # Add to ZIP in same directory as HTMLs would go
-                zip_path = f"{root_folder}/{articles_folder}/{docx_filename}"
+                zip_path = f"{root_folder}/{articles_folder}/{original_filename}"
                 zf.write(doc_path, zip_path)
                 logger.info(f"Added translation Google Doc to ZIP: {zip_path}")
