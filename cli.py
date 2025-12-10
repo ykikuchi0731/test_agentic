@@ -16,6 +16,7 @@ Available commands:
     scan-div-accshow   - Scan HTML files for invisible div.accshow elements
     scan-empty-wrappers - Scan HTML files for empty list wrapper elements
     gdoc-mapping       - Extract Google Docs mapping from migration log
+    rename-gdoc        - Rename Google Docs files based on article names
     remove-toc         - Remove div.mce-toc elements from HTML files
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
@@ -495,6 +496,65 @@ def cmd_gdoc_mapping(args):
         return 1
 
 
+def cmd_rename_gdoc(args):
+    """Rename Google Docs files based on article names."""
+    from pre_processing.rename_gdoc import main as rename_gdoc_main
+
+    print_separator("Rename Google Docs Files")
+
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='rename_gdoc'
+    )
+
+    mapping_file = Path(args.mapping_file)
+    input_folder = Path(args.input_folder)
+
+    if not mapping_file.exists():
+        logger.error(f"Mapping file not found: {mapping_file}")
+        print(f"\n❌ Error: Mapping file not found: {mapping_file}")
+        return 1
+
+    if not input_folder.exists():
+        logger.error(f"Input folder not found: {input_folder}")
+        print(f"\n❌ Error: Input folder not found: {input_folder}")
+        return 1
+
+    if not input_folder.is_dir():
+        logger.error(f"Path is not a directory: {input_folder}")
+        print(f"\n❌ Error: Path is not a directory: {input_folder}")
+        return 1
+
+    logger.info(f"Mapping file: {mapping_file}")
+    logger.info(f"Input folder: {input_folder}")
+    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+
+    try:
+        result = rename_gdoc_main(
+            mapping_file_path=str(mapping_file),
+            input_folder=str(input_folder),
+            output_file=args.output
+        )
+
+        stats = result['stats']
+        print("\n" + "=" * 80)
+        print("✅ Google Docs Renaming Complete")
+        print("=" * 80)
+        print(f"Total files:      {stats['total']}")
+        print(f"Renamed:          {stats['renamed']}")
+        print(f"Not found:        {stats['not_found']}")
+        print(f"Failed:           {stats['failed']}")
+        print(f"\n📄 Report saved to: {result['csv_path']}")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Renaming failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
+
+
 def cmd_remove_toc(args):
     """Remove div.mce-toc elements from HTML files."""
     from pre_processing.remove_toc import main as remove_toc_main
@@ -965,6 +1025,27 @@ def main():
         help='Path to migration log file (e.g., logs/migration_20251210_103001.log)'
     )
     gdoc_parser.set_defaults(func=cmd_gdoc_mapping)
+
+    # =================================================================
+    # Rename Google Docs command
+    # =================================================================
+    rename_gdoc_parser = subparsers.add_parser(
+        'rename-gdoc',
+        help='Rename Google Docs files based on article names',
+        description='Rename .docx files using article names from mapping CSV'
+    )
+    CommonCLI.add_common_args(rename_gdoc_parser)
+    rename_gdoc_parser.add_argument(
+        'mapping_file',
+        metavar='MAPPING_FILE',
+        help='Path to mapping CSV file (e.g., analysis_output/gdoc_article_mapping_*.csv)'
+    )
+    rename_gdoc_parser.add_argument(
+        'input_folder',
+        metavar='INPUT_FOLDER',
+        help='Path to folder containing .docx files to rename'
+    )
+    rename_gdoc_parser.set_defaults(func=cmd_rename_gdoc)
 
     # =================================================================
     # Remove TOC command

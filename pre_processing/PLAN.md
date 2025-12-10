@@ -43,6 +43,16 @@
   - Output file name is "gdoc_article_mapping_XXXX.csv", XXXX is date and time of execution aligned with other outputs
   - The module can be executed as a cli command as well as other commands
 
+  # Rename Google Docs file to article names
+  - This process is done in "pre_processing/remane_gdoc"
+  - It takes taw arugments "mapping_file_path" and "input_folder"
+    - Example of such file path is "analysis_output/gdoc_article_mapping_20251210_020913.csv"
+  - Check whether "mapping_file_path" exists and has three column: File, URL, Article
+  - Iterate through lines and search for  `.docx` file in "input_folder" with name of File value. 
+  - If there is a matched file, rename it to the value of Article column
+  - Report if File doesn't exist or renaming failed
+  - The module can be executed as a cli command as well as other commands
+
   # Removing div elements with class "mce-toc"
   - This process is done by pre_processing/remove_toc.py
   - It takes folder path argument "input_folder"
