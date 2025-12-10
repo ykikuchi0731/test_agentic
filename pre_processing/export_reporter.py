@@ -71,6 +71,7 @@ class ExportReporter:
             "attachments_count",
             "has_iframes",
             "google_docs_downloaded",
+            "google_docs_urls",
             "google_slides_converted",
             "requires_special_handling",
             "special_handling_flag",
@@ -88,8 +89,8 @@ class ExportReporter:
         iframe_result = article_data.get("iframe_result")
         category_path = article_data.get("category_path", [])
 
-        # Count Google Docs downloaded
-        google_docs_count, google_slides_count = ExportReporter._count_google_docs(
+        # Count Google Docs downloaded and extract URLs
+        google_docs_count, google_slides_count, google_docs_urls = ExportReporter._count_google_docs(
             iframe_result
         )
 
@@ -114,6 +115,7 @@ class ExportReporter:
             "attachments_count": len(attachments),
             "has_iframes": "Yes" if (iframe_result and iframe_result.get("has_iframes")) else "No",
             "google_docs_downloaded": google_docs_count,
+            "google_docs_urls": google_docs_urls,
             "google_slides_converted": google_slides_count,
             "requires_special_handling": "Yes"
             if article_data.get("requires_special_handling")
@@ -126,25 +128,51 @@ class ExportReporter:
 
     @staticmethod
     def _count_google_docs(iframe_result: Dict[str, Any]) -> tuple:
-        """Count Google Docs and Slides downloaded."""
+        """Count Google Docs and Slides downloaded, and extract Google Docs URLs."""
         if not iframe_result or not iframe_result.get("has_iframes"):
-            return 0, 0
+            return 0, 0, ""
 
         docs_count = 0
         slides_count = 0
+        doc_urls = []
 
         # Count from original
         if original_summary := iframe_result["original"].get("summary"):
-            docs_count += len(original_summary.get("docs_downloaded", []))
+            docs_downloaded = original_summary.get("docs_downloaded", [])
+            docs_count += len(docs_downloaded)
+            # Extract URLs from doc_info dictionaries
+            for doc in docs_downloaded:
+                if isinstance(doc, dict) and "doc_url" in doc:
+                    doc_urls.append(doc["doc_url"])
+                # Handle legacy format (just file paths)
+
             slides_count += len(original_summary.get("slides_converted", []))
 
         # Count from translations
         for trans in iframe_result.get("translations", []):
             if trans_summary := trans.get("summary"):
-                docs_count += len(trans_summary.get("docs_downloaded", []))
+                docs_downloaded = trans_summary.get("docs_downloaded", [])
+                docs_count += len(docs_downloaded)
+                # Extract URLs from doc_info dictionaries
+                for doc in docs_downloaded:
+                    if isinstance(doc, dict) and "doc_url" in doc:
+                        doc_urls.append(doc["doc_url"])
+
                 slides_count += len(trans_summary.get("slides_converted", []))
 
-        return docs_count, slides_count
+        # Join URLs with semicolon separator
+        urls_str = "; ".join(doc_urls) if doc_urls else ""
+
+        return docs_count, slides_count, urls_str
+
+    @staticmethod
+    def _extract_doc_urls(docs_downloaded: List) -> str:
+        """Extract Google Docs URLs from docs_downloaded list."""
+        urls = []
+        for doc in docs_downloaded:
+            if isinstance(doc, dict) and "doc_url" in doc:
+                urls.append(doc["doc_url"])
+        return "; ".join(urls) if urls else ""
 
     @staticmethod
     def _extract_category_labels(category_path: List) -> List[str]:
@@ -264,8 +292,12 @@ class ExportReporter:
 
         # Row for original article
         original_summary = iframe_result.get('original', {}).get('summary', {})
-        original_docs_count = len(original_summary.get('docs_downloaded', [])) if original_summary else 0
+        original_docs_downloaded = original_summary.get('docs_downloaded', []) if original_summary else []
+        original_docs_count = len(original_docs_downloaded)
         original_slides_count = len(original_summary.get('slides_converted', [])) if original_summary else 0
+
+        # Extract Google Docs URLs from original
+        original_docs_urls = ExportReporter._extract_doc_urls(original_docs_downloaded)
 
         rows.append({
             "article_number": article.get("number", ""),
@@ -280,6 +312,7 @@ class ExportReporter:
             "attachments_count": len(attachments),
             "has_iframes": "Yes",
             "google_docs_downloaded": original_docs_count,
+            "google_docs_urls": original_docs_urls,
             "google_slides_converted": original_slides_count,
             "requires_special_handling": "Yes" if article_data.get("requires_special_handling") else "No",
             "special_handling_flag": article_data.get("special_handling_flag", ""),
@@ -294,8 +327,12 @@ class ExportReporter:
             if i < len(translations):
                 trans = translations[i]
                 trans_summary = trans_result.get('summary', {})
-                trans_docs_count = len(trans_summary.get('docs_downloaded', [])) if trans_summary else 0
+                trans_docs_downloaded = trans_summary.get('docs_downloaded', []) if trans_summary else []
+                trans_docs_count = len(trans_docs_downloaded)
                 trans_slides_count = len(trans_summary.get('slides_converted', [])) if trans_summary else 0
+
+                # Extract Google Docs URLs from translation
+                trans_docs_urls = ExportReporter._extract_doc_urls(trans_docs_downloaded)
 
                 rows.append({
                     "article_number": trans.get("number", ""),
@@ -310,6 +347,7 @@ class ExportReporter:
                     "attachments_count": 0,  # Attachments are only listed with original
                     "has_iframes": "Yes",
                     "google_docs_downloaded": trans_docs_count,
+                    "google_docs_urls": trans_docs_urls,
                     "google_slides_converted": trans_slides_count,
                     "requires_special_handling": "No",
                     "special_handling_flag": "",

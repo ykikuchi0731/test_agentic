@@ -121,157 +121,83 @@ class ArticleFetcher:
         Returns:
             Deduplicated list of articles
         """
-        # First pass: Build complete bidirectional translation map
-        # Map of article_sys_id -> set of related article sys_ids (including self)
+        # Build bidirectional translation map
         translation_groups = {}
-
         for article in articles:
             article_sys_id = article.get("sys_id")
-            if article_sys_id not in translation_groups:
-                translation_groups[article_sys_id] = {article_sys_id}
+            translation_groups.setdefault(article_sys_id, {article_sys_id})
 
-            # Get translations for this article
-            translations = self.kb._get_translations_for_article(article_sys_id)
-            for trans in translations:
-                trans_sys_id = trans.get("sys_id")
-                if trans_sys_id:
-                    # Add bidirectional relationship
+            for trans in self.kb._get_translations_for_article(article_sys_id):
+                if trans_sys_id := trans.get("sys_id"):
                     translation_groups[article_sys_id].add(trans_sys_id)
-                    if trans_sys_id not in translation_groups:
-                        translation_groups[trans_sys_id] = {trans_sys_id}
-                    translation_groups[trans_sys_id].add(article_sys_id)
+                    translation_groups.setdefault(trans_sys_id, {trans_sys_id}).add(article_sys_id)
 
-        # Merge groups that share any articles (union-find)
-        # This handles cases where A->B and C->B but A doesn't know about C
-        merged_groups = []
-        processed = set()
-
+        # Merge groups via union-find (handles A->B, C->B where A doesn't know C)
+        merged_groups, processed = [], set()
         for article_sys_id in translation_groups:
             if article_sys_id in processed:
                 continue
 
-            # Start with this article's group
             group = translation_groups[article_sys_id].copy()
             processed.update(group)
 
-            # Keep expanding until no new articles are added
-            changed = True
-            while changed:
-                changed = False
+            # Expand group until no new members found
+            while True:
                 new_members = set()
                 for member_id in group:
                     if member_id in translation_groups:
-                        related = translation_groups[member_id] - processed
-                        if related:
-                            new_members.update(related)
-                            changed = True
-                if new_members:
-                    group.update(new_members)
-                    processed.update(new_members)
+                        new_members.update(translation_groups[member_id] - processed)
+                if not new_members:
+                    break
+                group.update(new_members)
+                processed.update(new_members)
 
             merged_groups.append(group)
 
-        # Second pass: For each group, prefer the original article over translations
-        # Build article lookup by sys_id
+        # Select one article per group (prefer original over translations)
         article_lookup = {article.get("sys_id"): article for article in articles}
-
-        # For each group, select the best representative
         selected_sys_ids = set()
 
+        def get_value(field):
+            """Extract value from dict or return as-is."""
+            return field.get("value") if isinstance(field, dict) else field
+
         for group in merged_groups:
-            # Find the original article (one without parent or translated_from)
-            original_article = None
-            fallback_article = None
-
+            # Find original (no parent/translated_from) or use first available
+            selected = None
             for sys_id in group:
-                article = article_lookup.get(sys_id)
-                if not article:
-                    continue
+                if article := article_lookup.get(sys_id):
+                    if not selected:
+                        selected = article
+                    if not get_value(article.get("parent")) and not get_value(article.get("translated_from")):
+                        selected = article
+                        break
 
-                # Store first article as fallback
-                if fallback_article is None:
-                    fallback_article = article
-
-                # Check if this is an original (not a translation)
-                parent = article.get("parent")
-                translated_from = article.get("translated_from")
-
-                # Handle parent/translated_from as dict or string
-                if isinstance(parent, dict):
-                    parent = parent.get("value")
-                if isinstance(translated_from, dict):
-                    translated_from = translated_from.get("value")
-
-                # If no parent and no translated_from, this is the original
-                if not parent and not translated_from:
-                    original_article = article
-                    break
-
-            # Use original if found, otherwise use fallback
-            selected_article = original_article or fallback_article
-            if selected_article:
-                selected_sys_ids.add(selected_article.get("sys_id"))
-
+            if selected:
+                selected_sys_ids.add(selected.get("sys_id"))
                 if len(group) > 1:
-                    article_type = "original" if original_article else "first available"
-                    logger.debug(
-                        f"Translation group with {len(group)} articles: "
-                        f"keeping {selected_article.get('number')} ({article_type})"
-                    )
+                    logger.debug(f"Translation group ({len(group)} articles): keeping {selected.get('number')}")
 
-        # Third pass: Build deduplicated list maintaining original order
-        deduplicated = []
-        for article in articles:
-            article_sys_id = article.get("sys_id")
-            if article_sys_id in selected_sys_ids:
-                deduplicated.append(article)
+        # Build deduplicated list maintaining original order
+        deduplicated = [a for a in articles if a.get("sys_id") in selected_sys_ids]
 
         logger.info(f"Early deduplication: {len(articles)} -> {len(deduplicated)} articles")
         return deduplicated
 
-    def deduplicate_translation_pairs(
-        self, articles_data: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def deduplicate_translation_pairs(self, articles_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Deduplicate translation pairs to avoid exporting the same content twice.
-
-        NOTE: This method is now redundant if deduplicate_first=True in fetch_all_articles.
-        Kept for backward compatibility.
-
-        Args:
-            articles_data: List of article data dictionaries
-
-        Returns:
-            Deduplicated list where translation pairs are merged
+        NOTE: Redundant if deduplicate_first=True. Kept for backward compatibility.
         """
-        seen_sys_ids = set()
-        deduplicated = []
-
+        seen_sys_ids, deduplicated = set(), []
         for article_data in articles_data:
             article = article_data["article"]
-            article_sys_id = article.get("sys_id")
-
-            if article_sys_id in seen_sys_ids:
-                logger.debug(
-                    f"Skipping {article.get('number')} - already processed as translation"
-                )
+            if (article_sys_id := article.get("sys_id")) in seen_sys_ids:
                 continue
 
             seen_sys_ids.add(article_sys_id)
-
-            # Mark translation sys_ids as seen
-            translations = article_data.get("translations", [])
-            for trans in translations:
-                if trans_sys_id := trans.get("sys_id"):
-                    seen_sys_ids.add(trans_sys_id)
-
+            seen_sys_ids.update(t.get("sys_id") for t in article_data.get("translations", []) if t.get("sys_id"))
             deduplicated.append(article_data)
-
-            if translations:
-                logger.debug(
-                    f"Keeping {article.get('number')} with {len(translations)} translation(s): "
-                    f"{[t.get('number') for t in translations]}"
-                )
 
         logger.info(f"Deduplication: {len(articles_data)} -> {len(deduplicated)} articles")
         return deduplicated
@@ -507,13 +433,17 @@ class ArticleFetcher:
             html_content = iframe_result["original"]["html"]
 
             # Add downloaded docs from original
-            for doc_path in iframe_result["original"]["downloaded_docs"]:
+            for doc_info in iframe_result["original"]["downloaded_docs"]:
+                # Handle both old format (string) and new format (dict)
+                doc_path = doc_info["file_path"] if isinstance(doc_info, dict) else doc_info
                 attachments.append(self._create_attachment_entry(doc_path, "original"))
                 downloaded_docs.append(doc_path)
 
             # Add downloaded docs from translations
             for trans in iframe_result["translations"]:
-                for doc_path in trans["downloaded_docs"]:
+                for doc_info in trans["downloaded_docs"]:
+                    # Handle both old format (string) and new format (dict)
+                    doc_path = doc_info["file_path"] if isinstance(doc_info, dict) else doc_info
                     attachments.append(
                         self._create_attachment_entry(doc_path, trans["language"])
                     )
@@ -536,67 +466,33 @@ class ArticleFetcher:
             )
 
             # Add downloaded docs as attachments
-            for doc_path in iframe_result["original"]["downloaded_docs"]:
+            for doc_info in iframe_result["original"]["downloaded_docs"]:
+                # Handle both old format (string) and new format (dict)
+                doc_path = doc_info["file_path"] if isinstance(doc_info, dict) else doc_info
                 attachments.append(self._create_attachment_entry(doc_path))
                 downloaded_docs.append(doc_path)
 
         return html_content, iframe_result, downloaded_docs, requires_special_handling, flag_message
 
     def _fetch_orphaned_attachments(
-        self,
-        original_article: Dict[str, Any],
-        translations: List[Dict[str, Any]],
-        existing_attachments: List[Dict[str, Any]]
+        self, original_article: Dict[str, Any], translations: List[Dict[str, Any]], existing_attachments: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        Fetch attachments that are referenced in HTML but not formally attached to articles.
-
-        This handles cases where HTML contains attachment references from old article versions
-        or copied from other articles.
-
-        Args:
-            original_article: Original article data
-            translations: List of translation articles
-            existing_attachments: Already fetched attachments
-
-        Returns:
-            List of newly fetched orphaned attachments
-        """
+        """Fetch attachments referenced in HTML but not formally attached."""
         import re
-        from bs4 import BeautifulSoup
 
-        # Extract all attachment sys_ids from existing attachments
         existing_sys_ids = {att.get('sys_id') for att in existing_attachments}
 
-        # Extract sys_ids from HTML
-        all_html = [original_article.get('text', '')] + [t.get('text', '') for t in translations]
+        # Extract sys_ids from all HTML content
+        patterns = [r'sys_attachment\.do\?sys_id=([a-f0-9]{32})', r'/attachment/([a-f0-9]{32})/', r'attachment\.do\?sys_id=([a-f0-9]{32})']
         referenced_sys_ids = set()
-
-        for html in all_html:
-            if not html:
-                continue
-
-            # Find sys_id in various ServiceNow attachment URL formats
-            patterns = [
-                r'sys_attachment\.do\?sys_id=([a-f0-9]{32})',
-                r'/attachment/([a-f0-9]{32})/',
-                r'attachment\.do\?sys_id=([a-f0-9]{32})',
-            ]
-
+        for html in [original_article.get('text', '')] + [t.get('text', '') for t in translations]:
             for pattern in patterns:
-                matches = re.findall(pattern, html, re.IGNORECASE)
-                referenced_sys_ids.update(matches)
+                referenced_sys_ids.update(re.findall(pattern, html, re.IGNORECASE))
 
-        # Find orphaned sys_ids (referenced but not fetched)
-        orphaned_sys_ids = referenced_sys_ids - existing_sys_ids
-
-        if not orphaned_sys_ids:
+        if not (orphaned_sys_ids := referenced_sys_ids - existing_sys_ids):
             return []
 
-        logger.info(
-            f"Found {len(orphaned_sys_ids)} attachment references in HTML not linked to articles: "
-            f"{list(orphaned_sys_ids)[:5]}{'...' if len(orphaned_sys_ids) > 5 else ''}"
-        )
+        logger.info(f"Found {len(orphaned_sys_ids)} orphaned attachments in HTML")
 
         # Fetch orphaned attachments
         orphaned_attachments = []
@@ -635,18 +531,14 @@ class ArticleFetcher:
 
         return orphaned_attachments
 
-    def _create_attachment_entry(
-        self, doc_path: str, language: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Create attachment entry dictionary for a downloaded document."""
+    def _create_attachment_entry(self, doc_path: str, language: Optional[str] = None) -> Dict[str, Any]:
+        """Create attachment entry for downloaded document."""
         path_obj = Path(doc_path)
-        entry = {
+        return {
             "file_name": path_obj.name,
             "file_path": doc_path,
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "size_bytes": path_obj.stat().st_size if path_obj.exists() else 0,
             "source": f"google_docs_iframe_{language}" if language else "google_docs_iframe",
+            **({'language': language} if language else {})
         }
-        if language:
-            entry["language"] = language
-        return entry

@@ -186,31 +186,28 @@ class IframeProcessor:
             return result
 
         try:
-            # Sanitize article title for filename
-            safe_filename = self._sanitize_filename(article_title)
-
-            # Build filename with article number prefix if provided (matching HTML export pattern)
-            if article_number:
-                safe_number = self._sanitize_filename(article_number)
-                if language_suffix:
-                    filename = f"{safe_number}-{safe_filename}{language_suffix}.docx"
-                else:
-                    filename = f"{safe_number}-{safe_filename}.docx"
-            else:
-                # Fallback to old pattern if no article number provided
-                if language_suffix:
-                    filename = f"{safe_filename}{language_suffix}.docx"
-                else:
-                    filename = f"{safe_filename}.docx"
-
+            # Download Google Doc with its original name (don't rename)
             logger.info(
-                f"Downloading Google Doc: {iframe_info['file_id']} as {filename}"
+                f"Downloading Google Doc: {iframe_info['file_id']}"
             )
 
-            # Download using browser exporter
+            # Download using browser exporter (keeps original Google Doc title as filename)
             export_result = self.google_docs_exporter.export_single_document(
-                iframe_info["file_id"], output_filename=filename
+                iframe_info["file_id"], output_filename=None
             )
+
+            # Log the download result with Google Doc link
+            if export_result["success"]:
+                doc_title = export_result.get("title", "Unknown")
+                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
+                downloaded_path = Path(export_result["file_path"])
+
+                logger.info(
+                    f"Downloaded Google Doc: '{doc_title}' | "
+                    f"File: {downloaded_path.name} | "
+                    f"URL: {doc_url} | "
+                    f"Article: {article_number} ({article_title})"
+                )
 
             # Build context for logging
             article_context = f"Article: {article_number or 'unknown'}"
@@ -231,8 +228,7 @@ class IframeProcessor:
                 result["error"] = export_result.get("error", "Unknown error")
                 logger.error(
                     f"❌ Failed to download Google Doc: {result['error']} | "
-                    f"{article_context} | {doc_context} | "
-                    f"Target filename: {filename}"
+                    f"{article_context} | {doc_context}"
                 )
 
         except Exception as e:
@@ -452,7 +448,13 @@ class IframeProcessor:
                     )
 
                     if result["success"]:
-                        summary["docs_downloaded"].append(result["file_path"])
+                        # Store both file path and Google Doc URL
+                        doc_info = {
+                            "file_path": result["file_path"],
+                            "doc_id": file_id,
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit"
+                        }
+                        summary["docs_downloaded"].append(doc_info)
                         downloaded_doc_ids.add(file_id)  # Mark as downloaded
 
                         # Remove iframe from HTML if download successful

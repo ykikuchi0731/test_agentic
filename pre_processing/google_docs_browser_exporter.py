@@ -322,7 +322,7 @@ class GoogleDocsBrowserExporter:
         return None
 
     def _wait_for_download_complete(
-        self, expected_extension: str = ".docx", timeout: int = None
+        self, expected_extension: str = ".docx", timeout: int = None, min_creation_time: float = None
     ) -> Optional[Path]:
         """
         Wait for file download to complete.
@@ -330,6 +330,7 @@ class GoogleDocsBrowserExporter:
         Args:
             expected_extension: Expected file extension
             timeout: Timeout in seconds (uses self.timeout if not provided)
+            min_creation_time: Only consider files created after this timestamp (epoch time)
 
         Returns:
             Path to downloaded file if successful, None otherwise
@@ -354,9 +355,18 @@ class GoogleDocsBrowserExporter:
                 )
             ]
 
+            # Further filter by creation time if specified
+            if min_creation_time is not None:
+                completed_files = [
+                    f for f in completed_files
+                    if f.stat().st_mtime >= min_creation_time
+                ]
+
             if completed_files:
-                downloaded_file = completed_files[0]
-                logger.info(f"✅ Download complete: {downloaded_file.name}")
+                # Sort by modification time (newest first) to get the most recently downloaded file
+                # This is critical when multiple downloads happen simultaneously
+                downloaded_file = sorted(completed_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
+                logger.info(f"✅ Download complete: {downloaded_file.name} (selected most recent from {len(completed_files)} new files)")
                 return downloaded_file
 
             # Check for partial downloads
@@ -463,11 +473,18 @@ class GoogleDocsBrowserExporter:
             # URL parameter method (more reliable than menu navigation)
             download_url = f"https://docs.google.com/document/d/{file_id}/export?format=docx"
             logger.info("Initiating download...")
+
+            # Record time before download starts (with small buffer for filesystem time precision)
+            import time
+            download_start_time = time.time() - 1.0  # 1 second buffer for safety
+
             self.driver.get(download_url)
 
             # Wait for download to complete
             downloaded_file = self._wait_for_download_complete(
-                expected_extension=".docx", timeout=self.timeout
+                expected_extension=".docx",
+                timeout=self.timeout,
+                min_creation_time=download_start_time
             )
 
             if not downloaded_file:
