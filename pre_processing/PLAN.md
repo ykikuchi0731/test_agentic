@@ -32,3 +32,13 @@
 - List of download htmls and docxs will be outputed in CSV format.
   - This CSV contains at least name of exported KB numbers, original sys_ids, category hierarchy
   - The number of rows should be equals to the number of downloaded htmls and Google Documets
+
+  # Get mapping of downloaded Google Documents, URLs, article numbers and names from log
+  - This process is doen by pre_processing/gdoc_article_mapping.py
+  - File path to log is given as an argument
+    - Sample of log is "./logs/migration_20251210_103001.log"
+  - Grep 'INFO - Downloaded Google Doc'
+  - From grepped lines, get File, URL, Article values
+  - output them in a CSV with File,URL,Article columns
+  - Output file name is "gdoc_article_mapping_XXXX.csv", XXXX is date and time of execution aligned with other outputs
+  - The module can be executed as a cli command as well as other commands

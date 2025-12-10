@@ -15,6 +15,7 @@ Available commands:
     convert-tables     - Convert tables with images to column blocks
     scan-div-accshow   - Scan HTML files for invisible div.accshow elements
     scan-empty-wrappers - Scan HTML files for empty list wrapper elements
+    gdoc-mapping       - Extract Google Docs mapping from migration log
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -446,6 +447,53 @@ def cmd_scan_empty_wrappers(args):
         return 1
 
 
+def cmd_gdoc_mapping(args):
+    """Extract Google Docs mapping from migration log."""
+    from pre_processing.gdoc_article_mapping import main as gdoc_mapping_main
+    from datetime import datetime
+
+    print_separator("Extract Google Docs Mapping")
+
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='gdoc_mapping'
+    )
+
+    log_file = Path(args.log_file)
+
+    if not log_file.exists():
+        logger.error(f"Log file not found: {log_file}")
+        print(f"\n❌ Error: Log file not found: {log_file}")
+        return 1
+
+    logger.info(f"Log file: {log_file}")
+    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+
+    try:
+        result = gdoc_mapping_main(
+            log_file=str(log_file),
+            output_file=args.output
+        )
+
+        print("\n" + "=" * 80)
+        if result['success']:
+            print("✅ Successfully extracted Google Docs mappings")
+        else:
+            print(f"❌ {result['error']}")
+        print("=" * 80)
+        print(f"Mappings found: {result['count']}")
+        if result['success']:
+            print(f"\n📄 CSV saved to: {result['csv_path']}")
+
+        return 0 if result['success'] else 1
+
+    except Exception as e:
+        logger.error(f"Extraction failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
+
+
 def cmd_make_subitem(args):
     """Make a Notion page a sub-item of another page."""
     from post_processing.page_hierarchy import NotionPageHierarchy
@@ -843,6 +891,22 @@ def main():
         help='Minimum empty wrappers per file to report (default: 3)'
     )
     wrappers_parser.set_defaults(func=cmd_scan_empty_wrappers, recursive=True)
+
+    # =================================================================
+    # Google Docs mapping command
+    # =================================================================
+    gdoc_parser = subparsers.add_parser(
+        'gdoc-mapping',
+        help='Extract Google Docs mapping from migration log',
+        description='Parse migration log to create CSV mapping of Google Docs to articles'
+    )
+    CommonCLI.add_common_args(gdoc_parser)
+    gdoc_parser.add_argument(
+        'log_file',
+        metavar='LOG_FILE',
+        help='Path to migration log file (e.g., logs/migration_20251210_103001.log)'
+    )
+    gdoc_parser.set_defaults(func=cmd_gdoc_mapping)
 
     # =================================================================
     # Make subitem command
