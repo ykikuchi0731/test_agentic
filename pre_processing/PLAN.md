@@ -34,11 +34,21 @@
   - The number of rows should be equals to the number of downloaded htmls and Google Documets
 
   # Get mapping of downloaded Google Documents, URLs, article numbers and names from log
-  - This process is doen by pre_processing/gdoc_article_mapping.py
+  - This process is done by pre_processing/gdoc_article_mapping.py
   - File path to log is given as an argument
     - Sample of log is "./logs/migration_20251210_103001.log"
   - Grep 'INFO - Downloaded Google Doc'
   - From grepped lines, get File, URL, Article values
   - output them in a CSV with File,URL,Article columns
   - Output file name is "gdoc_article_mapping_XXXX.csv", XXXX is date and time of execution aligned with other outputs
+  - The module can be executed as a cli command as well as other commands
+
+  # Removing div elements with class "mce-toc"
+  - This process is done by pre_processing/remove_toc.py
+  - It takes folder path argument "input_folder"
+  - Search under "input_folder" and get html files
+  - If htmls contain `div` elements with `mce-toc` class, remove that `div` elements
+    - Make sure do not edit other elements other than `div` with class `mce-toc`
+    - A html may contain multiple `div` with `mce-toc` class. In this case remove all matched `div` elements
+  - Report list htmls whose `div` with `mce-toc` are removed in CSV format
   - The module can be executed as a cli command as well as other commands

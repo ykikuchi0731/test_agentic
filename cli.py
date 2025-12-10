@@ -16,6 +16,7 @@ Available commands:
     scan-div-accshow   - Scan HTML files for invisible div.accshow elements
     scan-empty-wrappers - Scan HTML files for empty list wrapper elements
     gdoc-mapping       - Extract Google Docs mapping from migration log
+    remove-toc         - Remove div.mce-toc elements from HTML files
     make-subitem       - Make Notion page a sub-item of another
     organize-categories - Build category hierarchy in Notion database
     visualize          - Visualize category hierarchy
@@ -494,6 +495,63 @@ def cmd_gdoc_mapping(args):
         return 1
 
 
+def cmd_remove_toc(args):
+    """Remove div.mce-toc elements from HTML files."""
+    from pre_processing.remove_toc import main as remove_toc_main
+
+    print_separator("Remove TOC Elements")
+
+    CommonCLI.setup_logging(
+        verbose=getattr(args, 'verbose', False),
+        quiet=getattr(args, 'quiet', False),
+        log_prefix='remove_toc'
+    )
+
+    input_folder = Path(args.input_folder)
+
+    if not input_folder.exists():
+        logger.error(f"Folder not found: {input_folder}")
+        print(f"\n❌ Error: Folder not found: {input_folder}")
+        return 1
+
+    if not input_folder.is_dir():
+        logger.error(f"Path is not a directory: {input_folder}")
+        print(f"\n❌ Error: Path is not a directory: {input_folder}")
+        return 1
+
+    logger.info(f"Input folder: {input_folder}")
+    logger.info(f"Recursive: {args.recursive}")
+    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+
+    try:
+        result = remove_toc_main(
+            input_folder=str(input_folder),
+            output_file=args.output,
+            recursive=args.recursive
+        )
+
+        stats = result['stats']
+        print("\n" + "=" * 80)
+        print("✅ TOC Removal Complete")
+        print("=" * 80)
+        print(f"Total HTML files:     {stats['total_files']}")
+        print(f"Files with mce-toc:   {stats['files_with_toc']}")
+        print(f"Total TOC removed:    {stats['total_toc_removed']}")
+        print(f"Errors:               {stats['errors']}")
+
+        if result['csv_path']:
+            print(f"\n📄 Report saved to: {result['csv_path']}")
+        else:
+            print("\nNo mce-toc elements found in any files.")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"TOC removal failed: {e}", exc_info=True)
+        print(f"\n❌ Error: {e}")
+        return 1
+
+
 def cmd_make_subitem(args):
     """Make a Notion page a sub-item of another page."""
     from post_processing.page_hierarchy import NotionPageHierarchy
@@ -907,6 +965,28 @@ def main():
         help='Path to migration log file (e.g., logs/migration_20251210_103001.log)'
     )
     gdoc_parser.set_defaults(func=cmd_gdoc_mapping)
+
+    # =================================================================
+    # Remove TOC command
+    # =================================================================
+    toc_parser = subparsers.add_parser(
+        'remove-toc',
+        help='Remove div.mce-toc elements from HTML files',
+        description='Remove table of contents div elements from HTML files'
+    )
+    CommonCLI.add_common_args(toc_parser)
+    toc_parser.add_argument(
+        'input_folder',
+        metavar='FOLDER',
+        help='Path to folder containing HTML files'
+    )
+    toc_parser.add_argument(
+        '--no-recursive',
+        dest='recursive',
+        action='store_false',
+        help='Do not process subdirectories (recursive is default)'
+    )
+    toc_parser.set_defaults(func=cmd_remove_toc, recursive=True)
 
     # =================================================================
     # Make subitem command
