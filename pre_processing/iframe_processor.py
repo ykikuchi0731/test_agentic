@@ -186,21 +186,35 @@ class IframeProcessor:
             return result
 
         try:
+            # Capture file_id immediately to prevent mutation issues
+            requested_file_id = iframe_info['file_id']
+
             # Download Google Doc with its original name (don't rename)
             logger.info(
-                f"Downloading Google Doc: {iframe_info['file_id']}"
+                f"Downloading Google Doc: {requested_file_id}"
             )
 
             # Download using browser exporter (keeps original Google Doc title as filename)
             export_result = self.google_docs_exporter.export_single_document(
-                iframe_info["file_id"], output_filename=None
+                requested_file_id, output_filename=None
             )
 
             # Log the download result with Google Doc link
             if export_result["success"]:
                 doc_title = export_result.get("title", "Unknown")
-                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
+                doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
                 downloaded_path = Path(export_result["file_path"])
+
+                # Verify the download matches what was requested
+                # Check if file already exists (indicating it might be from a previous download)
+                if downloaded_path.exists():
+                    # Check file age - if it's more than 5 seconds old, it might be from a previous attempt
+                    file_age = time.time() - downloaded_path.stat().st_mtime
+                    if file_age > 5:
+                        logger.warning(
+                            f"⚠️  Downloaded file is {file_age:.1f}s old - may be from a previous download. "
+                            f"Requested: {requested_file_id}, File: {downloaded_path.name}"
+                        )
 
                 logger.info(
                     f"Downloaded Google Doc: '{doc_title}' | "
@@ -213,7 +227,7 @@ class IframeProcessor:
             article_context = f"Article: {article_number or 'unknown'}"
             if article_title and article_title != "document":
                 article_context += f" ({article_title})"
-            doc_context = f"Google Doc ID: {iframe_info['file_id']}"
+            doc_context = f"Google Doc ID: {requested_file_id}"
 
             if export_result["success"]:
                 result["success"] = True
@@ -226,7 +240,6 @@ class IframeProcessor:
                 )
             else:
                 result["error"] = export_result.get("error", "Unknown error")
-                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
 
                 # Log in structured format for mapping extraction
                 logger.error(
@@ -239,8 +252,7 @@ class IframeProcessor:
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            file_id = iframe_info.get('file_id', 'unknown')
-            doc_url = f"https://docs.google.com/document/d/{file_id}/edit" if file_id != 'unknown' else "N/A"
+            doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
 
             # Log in structured format for mapping extraction
             logger.error(
