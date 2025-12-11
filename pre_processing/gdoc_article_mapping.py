@@ -110,6 +110,63 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
     return mappings
 
 
+def extract_gdoc_mapping_from_export_report(report_csv_path: str) -> List[Dict[str, str]]:
+    """
+    Extract Google Docs mapping from export report CSV.
+
+    This is more reliable than log parsing since the export report contains
+    structured data about all Google Docs downloads (both successful and failed).
+
+    Args:
+        report_csv_path: Path to export report CSV file
+
+    Returns:
+        List of dictionaries with File, URL, Article, Status, Error keys
+    """
+    report_path = Path(report_csv_path)
+    if not report_path.exists():
+        raise FileNotFoundError(f"Export report not found: {report_csv_path}")
+
+    mappings = []
+
+    with open(report_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Only process DOCX export rows (Google Docs)
+            if row.get('export_type') != 'DOCX':
+                continue
+
+            google_docs_urls = row.get('google_docs_urls', '').strip()
+            if not google_docs_urls:
+                continue
+
+            # Parse URLs (may be semicolon-separated)
+            urls = [url.strip() for url in google_docs_urls.split(';') if url.strip()]
+
+            article_number = row.get('article_number', '')
+            article_title = row.get('article_title', '')
+            article = f"{article_number} ({article_title})"
+            status = row.get('status', 'Unknown')
+            error = row.get('error_message', '')
+
+            # Create mapping for each URL
+            for url in urls:
+                # TODO: We don't have filename info in export report for individual docs
+                # This needs to be enhanced
+                mappings.append({
+                    'File': 'N/A',  # Not available in export report
+                    'URL': url,
+                    'Article': article,
+                    'Status': 'Success' if status == 'success' else 'Failed',
+                    'Error': error
+                })
+
+    success_count = sum(1 for m in mappings if m['Status'] == 'Success')
+    failed_count = sum(1 for m in mappings if m['Status'] == 'Failed')
+    logger.info(f"Extracted {len(mappings)} Google Docs mappings from export report (Success: {success_count}, Failed: {failed_count})")
+    return mappings
+
+
 def save_mapping_to_csv(mappings: List[Dict[str, str]], output_path: str) -> str:
     """
     Save Google Docs mappings to CSV file.
