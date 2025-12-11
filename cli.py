@@ -484,8 +484,10 @@ def cmd_gdoc_mapping(args):
         else:
             print(f"❌ {result['error']}")
         print("=" * 80)
-        print(f"Mappings found: {result['count']}")
+        print(f"Total mappings:   {result['count']}")
         if result['success']:
+            print(f"  Success:        {result['success_count']}")
+            print(f"  Failed:         {result['failed_count']}")
             print(f"\n📄 CSV saved to: {result['csv_path']}")
 
         return 0 if result['success'] else 1

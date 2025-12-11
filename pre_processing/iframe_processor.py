@@ -226,19 +226,29 @@ class IframeProcessor:
                 )
             else:
                 result["error"] = export_result.get("error", "Unknown error")
+                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
+
+                # Log in structured format for mapping extraction
                 logger.error(
-                    f"❌ Failed to download Google Doc: {result['error']} | "
-                    f"{article_context} | {doc_context}"
+                    f"❌ Failed to download Google Doc: '{export_result.get('title', 'Unknown')}' | "
+                    f"File: N/A | "
+                    f"URL: {doc_url} | "
+                    f"Article: {article_number} ({article_title}) | "
+                    f"Error: {result['error']}"
                 )
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            article_context = f"Article: {article_number or 'unknown'}"
-            if article_title and article_title != "document":
-                article_context += f" ({article_title})"
+            file_id = iframe_info.get('file_id', 'unknown')
+            doc_url = f"https://docs.google.com/document/d/{file_id}/edit" if file_id != 'unknown' else "N/A"
+
+            # Log in structured format for mapping extraction
             logger.error(
-                f"❌ Error processing Google Docs iframe: {e} | "
-                f"{article_context} | Google Doc ID: {iframe_info.get('file_id', 'unknown')}"
+                f"❌ Failed to download Google Doc: 'Unknown' | "
+                f"File: N/A | "
+                f"URL: {doc_url} | "
+                f"Article: {article_number or 'unknown'} ({article_title}) | "
+                f"Error: {e}"
             )
 
         return result

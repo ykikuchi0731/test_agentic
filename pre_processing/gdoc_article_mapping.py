@@ -13,14 +13,15 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
     """
     Extract Google Docs mapping from migration log file.
 
-    Parses log entries like:
-    "Downloaded Google Doc: 'title' | File: filename.docx | URL: https://... | Article: KB0010400 (title)"
+    Parses both successful and failed download log entries:
+    - Success: "Downloaded Google Doc: 'title' | File: filename.docx | URL: https://... | Article: KB0010400 (title)"
+    - Failure: "Failed to download Google Doc: 'title' | File: N/A | URL: https://... | Article: KB0010400 (title) | Error: ..."
 
     Args:
         log_file_path: Path to migration log file
 
     Returns:
-        List of dictionaries with File, URL, Article keys
+        List of dictionaries with File, URL, Article, Status, Error keys
     """
     log_path = Path(log_file_path)
     if not log_path.exists():
@@ -28,23 +29,28 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
 
     mappings = []
 
-    # Pattern for new log format (after our changes)
-    pattern_new = re.compile(
+    # Pattern for successful downloads (new format)
+    pattern_success = re.compile(
         r"Downloaded Google Doc: '([^']+)' \| File: ([^\|]+) \| URL: ([^\|]+) \| Article: ([^\n]+)"
     )
 
-    # Pattern for old log format
+    # Pattern for failed downloads (new format)
+    pattern_failed = re.compile(
+        r"Failed to download Google Doc: '([^']+)' \| File: ([^\|]+) \| URL: ([^\|]+) \| Article: ([^\|]+) \| Error: ([^\n]+)"
+    )
+
+    # Pattern for old success format
     pattern_old = re.compile(
         r"Downloaded Google Doc to: ([^\|]+) \| Article: ([^(]+)\(([^)]+)\) \| Google Doc ID: ([a-zA-Z0-9_-]+)"
     )
 
     with open(log_path, 'r', encoding='utf-8') as f:
         for line in f:
-            if 'Downloaded Google Doc' not in line:
+            if 'Google Doc' not in line:
                 continue
 
-            # Try new format first
-            match = pattern_new.search(line)
+            # Try success pattern first
+            match = pattern_success.search(line)
             if match:
                 doc_title = match.group(1).strip()
                 filename = match.group(2).strip()
@@ -54,7 +60,27 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
                 mappings.append({
                     'File': filename,
                     'URL': url,
-                    'Article': article
+                    'Article': article,
+                    'Status': 'Success',
+                    'Error': ''
+                })
+                continue
+
+            # Try failed pattern
+            match = pattern_failed.search(line)
+            if match:
+                doc_title = match.group(1).strip()
+                filename = match.group(2).strip()
+                url = match.group(3).strip()
+                article = match.group(4).strip()
+                error = match.group(5).strip()
+
+                mappings.append({
+                    'File': filename,
+                    'URL': url,
+                    'Article': article,
+                    'Status': 'Failed',
+                    'Error': error
                 })
                 continue
 
@@ -73,10 +99,14 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
                 mappings.append({
                     'File': filename,
                     'URL': url,
-                    'Article': article
+                    'Article': article,
+                    'Status': 'Success',
+                    'Error': ''
                 })
 
-    logger.info(f"Extracted {len(mappings)} Google Docs mappings from log")
+    success_count = sum(1 for m in mappings if m['Status'] == 'Success')
+    failed_count = sum(1 for m in mappings if m['Status'] == 'Failed')
+    logger.info(f"Extracted {len(mappings)} Google Docs mappings from log (Success: {success_count}, Failed: {failed_count})")
     return mappings
 
 
@@ -95,7 +125,7 @@ def save_mapping_to_csv(mappings: List[Dict[str, str]], output_path: str) -> str
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['File', 'URL', 'Article'])
+        writer = csv.DictWriter(f, fieldnames=['File', 'URL', 'Article', 'Status', 'Error'])
         writer.writeheader()
         writer.writerows(mappings)
 
@@ -135,10 +165,16 @@ def main(log_file: str, output_file: str = None) -> Dict[str, Any]:
     # Save to CSV
     csv_path = save_mapping_to_csv(mappings, output_file)
 
+    # Count success/failed
+    success_count = sum(1 for m in mappings if m['Status'] == 'Success')
+    failed_count = sum(1 for m in mappings if m['Status'] == 'Failed')
+
     return {
         'success': True,
         'csv_path': csv_path,
-        'count': len(mappings)
+        'count': len(mappings),
+        'success_count': success_count,
+        'failed_count': failed_count
     }
 
 
