@@ -1,6 +1,7 @@
 """Process iframe-embedded Google Docs and Slides in HTML content."""
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -199,10 +200,12 @@ class IframeProcessor:
                 requested_file_id, output_filename=None
             )
 
+            # Build doc_url (used in all code paths)
+            doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
+
             # Log the download result with Google Doc link
             if export_result["success"]:
                 doc_title = export_result.get("title", "Unknown")
-                doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
                 downloaded_path = Path(export_result["file_path"])
 
                 # Verify the download matches what was requested
@@ -252,8 +255,6 @@ class IframeProcessor:
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
-
             # Log in structured format for mapping extraction
             logger.error(
                 f"❌ Failed to download Google Doc: 'Unknown' | "
