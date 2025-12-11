@@ -28,8 +28,9 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
         raise FileNotFoundError(f"Log file not found: {log_file_path}")
 
     mappings = []
+    seen_combinations = set()  # Track (url, article) to avoid duplicates
 
-    # Pattern for successful downloads (new format)
+    # Pattern for successful downloads (new format - preferred)
     pattern_success = re.compile(
         r"Downloaded Google Doc: '([^']+)' \| File: ([^\|]+) \| URL: ([^\|]+) \| Article: ([^\n]+)"
     )
@@ -39,14 +40,18 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
         r"Failed to download Google Doc: '([^']+)' \| File: ([^\|]+) \| URL: ([^\|]+) \| Article: ([^\|]+) \| Error: ([^\n]+)"
     )
 
-    # Pattern for old success format
-    pattern_old = re.compile(
-        r"Downloaded Google Doc to: ([^\|]+) \| Article: ([^(]+)\(([^)]+)\) \| Google Doc ID: ([a-zA-Z0-9_-]+)"
+    # Pattern for old success format (skip to avoid duplicates with new format)
+    pattern_old_skip = re.compile(
+        r"✅ Downloaded Google Doc to:"
     )
 
     with open(log_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'Google Doc' not in line:
+                continue
+
+            # Skip old format lines (they duplicate new format)
+            if pattern_old_skip.search(line):
                 continue
 
             # Try success pattern first
@@ -56,6 +61,12 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
                 filename = match.group(2).strip()
                 url = match.group(3).strip()
                 article = match.group(4).strip()
+
+                # Check for duplicates
+                combination = (url, article)
+                if combination in seen_combinations:
+                    continue
+                seen_combinations.add(combination)
 
                 mappings.append({
                     'File': filename,
@@ -75,6 +86,12 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
                 article = match.group(4).strip()
                 error = match.group(5).strip()
 
+                # Check for duplicates
+                combination = (url, article)
+                if combination in seen_combinations:
+                    continue
+                seen_combinations.add(combination)
+
                 mappings.append({
                     'File': filename,
                     'URL': url,
@@ -83,26 +100,6 @@ def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
                     'Error': error
                 })
                 continue
-
-            # Try old format
-            match = pattern_old.search(line)
-            if match:
-                file_path = match.group(1).strip()
-                article_number = match.group(2).strip()
-                article_title = match.group(3).strip()
-                doc_id = match.group(4).strip()
-
-                filename = Path(file_path).name
-                url = f"https://docs.google.com/document/d/{doc_id}/edit"
-                article = f"{article_number} ({article_title})"
-
-                mappings.append({
-                    'File': filename,
-                    'URL': url,
-                    'Article': article,
-                    'Status': 'Success',
-                    'Error': ''
-                })
 
     success_count = sum(1 for m in mappings if m['Status'] == 'Success')
     failed_count = sum(1 for m in mappings if m['Status'] == 'Failed')

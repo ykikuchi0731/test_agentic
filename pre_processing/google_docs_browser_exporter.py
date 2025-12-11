@@ -447,22 +447,53 @@ class GoogleDocsBrowserExporter:
             wait = WebDriverWait(self.driver, self.timeout)
 
             try:
+                # Wait for URL to contain the correct file_id (ensures navigation completed)
+                wait.until(lambda driver: file_id in driver.current_url)
+                logger.debug(f"URL loaded with file_id: {file_id}")
+
                 # Wait for document canvas or title to indicate page loaded
                 wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".kix-page-canvas, .docs-title-input"))
                 )
                 logger.debug("Document loaded")
+
+                # Additional wait to ensure title has updated (avoid stale element)
+                import time
+                time.sleep(1)
+
             except TimeoutException:
                 result["error"] = "Timeout waiting for document to load"
                 logger.error(result["error"])
                 return result
 
-            # Get document title
+            # Get document title (with retry in case of stale element)
             try:
-                title_element = self.driver.find_element(By.CSS_SELECTOR, ".docs-title-input")
-                doc_title = title_element.get_attribute("value") or "Untitled"
-                result["title"] = doc_title
-                logger.info(f"Document title: {doc_title}")
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        title_element = self.driver.find_element(By.CSS_SELECTOR, ".docs-title-input")
+                        doc_title = title_element.get_attribute("value") or "Untitled"
+
+                        # Verify title is not empty and element is not stale
+                        if doc_title and doc_title != "Untitled":
+                            result["title"] = doc_title
+                            logger.info(f"Document title: {doc_title}")
+                            break
+                        elif attempt < max_retries - 1:
+                            logger.debug(f"Title empty or Untitled, retrying... (attempt {attempt + 1})")
+                            import time
+                            time.sleep(0.5)
+                        else:
+                            result["title"] = doc_title
+                            logger.info(f"Document title: {doc_title}")
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.debug(f"Error getting title, retrying... (attempt {attempt + 1}): {e}")
+                            import time
+                            time.sleep(0.5)
+                        else:
+                            raise
+
             except NoSuchElementException:
                 doc_title = "Untitled"
                 result["title"] = doc_title
