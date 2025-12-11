@@ -64,143 +64,77 @@ class GoogleDocsBrowserExporter:
         logger.info(f"Browser: {browser_type}, Headless: {headless}")
 
     def _setup_browser(self) -> webdriver.Remote:
-        """
-        Setup and configure browser with download preferences.
-
-        Returns:
-            Configured WebDriver instance
-
-        Raises:
-            ValueError: If browser_type is not supported
-        """
+        """Setup and configure browser with download preferences."""
         logger.info(f"Setting up {self.browser_type} browser...")
 
-        # Chrome setup
         if self.browser_type == "chrome":
             options = webdriver.ChromeOptions()
-
-            # Download preferences
-            prefs = {
+            options.add_experimental_option("prefs", {
                 "download.default_directory": str(self.download_dir),
                 "download.prompt_for_download": False,
                 "download.directory_upgrade": True,
                 "safebrowsing.enabled": False,
                 "profile.default_content_settings.popups": 0,
                 "profile.default_content_setting_values.automatic_downloads": 1,
-            }
-            options.add_experimental_option("prefs", prefs)
-
+            })
             if self.headless:
                 options.add_argument("--headless=new")
                 options.add_argument("--disable-gpu")
-
-            # Additional options for stability
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-blink-features=AutomationControlled")
+            for arg in ["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]:
+                options.add_argument(arg)
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_experimental_option("useAutomationExtension", False)
 
-            # Install ChromeDriver and fix Mac ARM64 path issue
             driver_path = ChromeDriverManager().install()
-
-            # Fix for Mac ARM64: webdriver-manager returns wrong path
-            # It points to THIRD_PARTY_NOTICES instead of the actual chromedriver
             if 'THIRD_PARTY_NOTICES' in driver_path or not os.path.isfile(driver_path):
                 logger.warning(f"ChromeDriver path seems incorrect: {driver_path}")
-
-                # Get the parent directory
                 driver_dir = os.path.dirname(driver_path)
-
-                # Try to find the actual chromedriver executable
-                possible_paths = [
-                    os.path.join(driver_dir, 'chromedriver'),
-                    os.path.join(os.path.dirname(driver_dir), 'chromedriver'),
-                ]
-
-                for possible_path in possible_paths:
+                for possible_path in [os.path.join(driver_dir, 'chromedriver'), os.path.join(os.path.dirname(driver_dir), 'chromedriver')]:
                     if os.path.isfile(possible_path) and os.access(possible_path, os.X_OK):
                         driver_path = possible_path
                         logger.info(f"✅ Fixed ChromeDriver path: {driver_path}")
                         break
                 else:
-                    # Last resort: search the entire .wdm directory
                     wdm_base = os.path.dirname(os.path.dirname(driver_dir))
                     for root, dirs, files in os.walk(wdm_base):
-                        if 'chromedriver' in files:
-                            potential_driver = os.path.join(root, 'chromedriver')
-                            if os.access(potential_driver, os.X_OK):
-                                driver_path = potential_driver
-                                logger.info(f"✅ Found ChromeDriver: {driver_path}")
-                                break
+                        if 'chromedriver' in files and os.access(potential_driver := os.path.join(root, 'chromedriver'), os.X_OK):
+                            driver_path = potential_driver
+                            logger.info(f"✅ Found ChromeDriver: {driver_path}")
+                            break
+            driver = webdriver.Chrome(service=ChromeService(driver_path), options=options)
 
-            service = ChromeService(driver_path)
-            driver = webdriver.Chrome(service=service, options=options)
-
-        # Firefox setup
         elif self.browser_type == "firefox":
             options = webdriver.FirefoxOptions()
-
-            # Download preferences
-            options.set_preference("browser.download.folderList", 2)
-            options.set_preference(
-                "browser.download.dir", str(self.download_dir)
-            )
-            options.set_preference("browser.download.useDownloadDir", True)
-            options.set_preference(
-                "browser.helperApps.neverAsk.saveToDisk",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-            options.set_preference("browser.download.manager.showWhenStarting", False)
-            options.set_preference("pdfjs.disabled", True)
-
+            for key, value in [("browser.download.folderList", 2), ("browser.download.dir", str(self.download_dir)),
+                              ("browser.download.useDownloadDir", True), ("browser.download.manager.showWhenStarting", False),
+                              ("browser.helperApps.neverAsk.saveToDisk", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                              ("pdfjs.disabled", True)]:
+                options.set_preference(key, value)
             if self.headless:
                 options.add_argument("--headless")
+            driver = webdriver.Firefox(service=FirefoxService(GeckoDriverManager().install()), options=options)
 
-            service = FirefoxService(GeckoDriverManager().install())
-            driver = webdriver.Firefox(service=service, options=options)
-
-        # Edge setup
         elif self.browser_type == "edge":
             options = webdriver.EdgeOptions()
-
-            # Download preferences
-            prefs = {
+            options.add_experimental_option("prefs", {
                 "download.default_directory": str(self.download_dir),
                 "download.prompt_for_download": False,
                 "download.directory_upgrade": True,
                 "safebrowsing.enabled": False,
-            }
-            options.add_experimental_option("prefs", prefs)
-
+            })
             if self.headless:
                 options.add_argument("--headless")
-
-            service = EdgeService(EdgeChromiumDriverManager().install())
-            driver = webdriver.Edge(service=service, options=options)
+            driver = webdriver.Edge(service=EdgeService(EdgeChromiumDriverManager().install()), options=options)
 
         else:
-            raise ValueError(
-                f"Unsupported browser type: {self.browser_type}. "
-                f"Supported: chrome, firefox, edge"
-            )
+            raise ValueError(f"Unsupported browser type: {self.browser_type}. Supported: chrome, firefox, edge")
 
-        # Set window size
-        if not self.headless:
-            driver.maximize_window()
-        else:
-            driver.set_window_size(1920, 1080)
-
+        driver.maximize_window() if not self.headless else driver.set_window_size(1920, 1080)
         logger.info("✅ Browser setup complete")
         return driver
 
     def start_browser(self) -> bool:
-        """
-        Start browser session.
-
-        Returns:
-            True if browser started successfully, False otherwise
-        """
+        """Start browser session."""
         try:
             if self.driver is None:
                 self.driver = self._setup_browser()
@@ -215,75 +149,40 @@ class GoogleDocsBrowserExporter:
             try:
                 logger.info("Stopping browser...")
                 self.driver.quit()
-                self.driver = None
-                self.is_logged_in = False
+                self.driver = self.is_logged_in = None
                 logger.info("✅ Browser stopped")
             except Exception as e:
                 logger.error(f"Error stopping browser: {e}")
 
     def manual_login_wait(self, wait_message: str = None) -> bool:
-        """
-        Wait for user to manually log in to Google account.
-
-        Args:
-            wait_message: Custom message to display
-
-        Returns:
-            True if login appears successful, False otherwise
-
-        This method:
-            1. Opens Google Docs homepage
-            2. Displays message asking user to log in
-            3. Waits for user to complete login
-            4. Checks if login was successful
-        """
+        """Wait for user to manually log in to Google account."""
         if not self.driver:
             logger.error("Browser not started")
             return False
 
         try:
             logger.info("Opening Google Docs for manual login...")
-
-            # Navigate to Google Docs
             self.driver.get("https://docs.google.com/")
-
-            message = wait_message or (
-                "Please log in to your Google account in the browser window.\n"
-                "Press Enter in the terminal when you're logged in..."
-            )
-
-            print("\n" + "=" * 80)
-            print("MANUAL LOGIN REQUIRED")
-            print("=" * 80)
-            print(message)
-            print("=" * 80)
-
-            # Wait for user confirmation
+            message = wait_message or "Please log in to your Google account in the browser window.\nPress Enter in the terminal when you're logged in..."
+            print("\n" + "=" * 80 + "\nMANUAL LOGIN REQUIRED\n" + "=" * 80 + f"\n{message}\n" + "=" * 80)
             input()
+            time.sleep(2)
 
-            # Check if logged in by looking for Google account indicators
-            time.sleep(2)  # Give page time to load
-
-            # Try to find indicators of being logged in
             try:
-                # Look for common Google account elements
                 self.driver.find_element(By.CSS_SELECTOR, "[aria-label*='Google Account']")
                 self.is_logged_in = True
                 logger.info("✅ Login verification successful")
                 print("✅ Login verified!")
                 return True
             except NoSuchElementException:
-                # Fallback: assume login if not on login page
-                current_url = self.driver.current_url
-                if "accounts.google.com" not in current_url:
+                if "accounts.google.com" not in self.driver.current_url:
                     self.is_logged_in = True
                     logger.info("✅ Appears to be logged in (not on login page)")
                     print("✅ Proceeding (login page not detected)")
                     return True
-                else:
-                    logger.warning("⚠️  Still on login page")
-                    print("⚠️  Warning: Still appears to be on login page")
-                    return False
+                logger.warning("⚠️  Still on login page")
+                print("⚠️  Warning: Still appears to be on login page")
+                return False
 
         except Exception as e:
             logger.error(f"Error during manual login: {e}")
@@ -322,7 +221,7 @@ class GoogleDocsBrowserExporter:
         return None
 
     def _wait_for_download_complete(
-        self, expected_extension: str = ".docx", timeout: int = None, min_creation_time: float = None
+        self, expected_extension: str = ".docx", timeout: int = None, min_creation_time: float = None, expected_filename_pattern: str = None, marker_file: Path = None
     ) -> Optional[Path]:
         """
         Wait for file download to complete.
@@ -330,7 +229,9 @@ class GoogleDocsBrowserExporter:
         Args:
             expected_extension: Expected file extension
             timeout: Timeout in seconds (uses self.timeout if not provided)
-            min_creation_time: Only consider files created after this timestamp (epoch time)
+            min_creation_time: Only consider files created after this timestamp (epoch time) - DEPRECATED, use marker_file instead
+            expected_filename_pattern: Optional pattern to match in filename (helps avoid wrong file matches)
+            marker_file: Unique marker file created before download - files created after this marker are candidates
 
         Returns:
             Path to downloaded file if successful, None otherwise
@@ -341,11 +242,21 @@ class GoogleDocsBrowserExporter:
         start_time = time.time()
         initial_files = set(self.download_dir.glob("*"))
 
+        # Get marker file creation time if provided (more reliable than timestamp)
+        marker_creation_time = None
+        if marker_file and marker_file.exists():
+            marker_creation_time = marker_file.stat().st_mtime
+            logger.debug(f"Using marker file created at {marker_creation_time}")
+        elif min_creation_time is not None:
+            # Fallback to min_creation_time for backward compatibility
+            marker_creation_time = min_creation_time
+            logger.debug(f"Using timestamp-based matching (legacy mode)")
+
         while time.time() - start_time < timeout:
             current_files = set(self.download_dir.glob("*"))
             new_files = current_files - initial_files
 
-            # Filter for completed files (not .crdownload, .tmp, .part)
+            # Filter for completed files (not .crdownload, .tmp, .part, and not marker files)
             completed_files = [
                 f
                 for f in new_files
@@ -353,14 +264,29 @@ class GoogleDocsBrowserExporter:
                 and not any(
                     f.name.endswith(ext) for ext in [".crdownload", ".tmp", ".part"]
                 )
+                and not f.name.startswith(".download_marker_")
             ]
 
-            # Further filter by creation time if specified
-            if min_creation_time is not None:
+            # Further filter by marker creation time if specified
+            if marker_creation_time is not None:
                 completed_files = [
                     f for f in completed_files
-                    if f.stat().st_mtime >= min_creation_time
+                    if f.stat().st_mtime >= marker_creation_time
                 ]
+
+            # Further filter by expected filename pattern if specified
+            if expected_filename_pattern and completed_files:
+                import re
+                sanitized_pattern = re.sub(r'[<>:"/\\|?*]', '', expected_filename_pattern)
+                matched_files = [
+                    f for f in completed_files
+                    if sanitized_pattern in f.stem
+                ]
+                if matched_files:
+                    completed_files = matched_files
+                    logger.debug(f"Filtered {len(completed_files)} files matching pattern '{sanitized_pattern}'")
+                else:
+                    logger.warning(f"No files matched expected pattern '{sanitized_pattern}', using all {len(completed_files)} candidates")
 
             if completed_files:
                 # Sort by modification time (newest first) to get the most recently downloaded file
@@ -466,36 +392,26 @@ class GoogleDocsBrowserExporter:
                 logger.error(result["error"])
                 return result
 
-            # Get document title (with retry in case of stale element)
+            # Get document title with retry logic
+            doc_title = "Untitled"
             try:
-                max_retries = 3
-                for attempt in range(max_retries):
+                for attempt in range(3):
                     try:
-                        title_element = self.driver.find_element(By.CSS_SELECTOR, ".docs-title-input")
-                        doc_title = title_element.get_attribute("value") or "Untitled"
-
-                        # Verify title is not empty and element is not stale
-                        if doc_title and doc_title != "Untitled":
-                            result["title"] = doc_title
-                            logger.info(f"Document title: {doc_title}")
+                        if (title := self.driver.find_element(By.CSS_SELECTOR, ".docs-title-input").get_attribute("value") or "Untitled") and title != "Untitled":
+                            doc_title = title
                             break
-                        elif attempt < max_retries - 1:
-                            logger.debug(f"Title empty or Untitled, retrying... (attempt {attempt + 1})")
-                            import time
+                        if attempt < 2:
+                            logger.debug(f"Title empty/Untitled, retrying (attempt {attempt + 1})")
                             time.sleep(0.5)
-                        else:
-                            result["title"] = doc_title
-                            logger.info(f"Document title: {doc_title}")
                     except Exception as e:
-                        if attempt < max_retries - 1:
-                            logger.debug(f"Error getting title, retrying... (attempt {attempt + 1}): {e}")
-                            import time
+                        if attempt < 2:
+                            logger.debug(f"Error getting title, retrying (attempt {attempt + 1}): {e}")
                             time.sleep(0.5)
                         else:
                             raise
-
+                result["title"] = doc_title
+                logger.info(f"Document title: {doc_title}")
             except NoSuchElementException:
-                doc_title = "Untitled"
                 result["title"] = doc_title
                 logger.warning("Could not find document title, using 'Untitled'")
 
@@ -505,38 +421,51 @@ class GoogleDocsBrowserExporter:
             download_url = f"https://docs.google.com/document/d/{file_id}/export?format=docx"
             logger.info("Initiating download...")
 
-            # Record time before download starts (with small buffer for filesystem time precision)
-            import time
-            download_start_time = time.time() - 1.0  # 1 second buffer for safety
+            # Create a unique marker file to identify downloads from THIS request
+            # This is much more reliable than timestamp-only matching
+            import uuid
+            marker_id = str(uuid.uuid4())
+            marker_file = self.download_dir / f".download_marker_{marker_id}"
+            marker_file.touch()
+            logger.debug(f"Created download marker: {marker_file.name}")
 
-            self.driver.get(download_url)
+            try:
+                self.driver.get(download_url)
 
-            # Wait for download to complete
-            downloaded_file = self._wait_for_download_complete(
-                expected_extension=".docx",
-                timeout=self.timeout,
-                min_creation_time=download_start_time
-            )
+                # Wait for download to complete
+                # Pass marker file and doc_title for accurate matching
+                downloaded_file = self._wait_for_download_complete(
+                    expected_extension=".docx",
+                    timeout=self.timeout,
+                    marker_file=marker_file,
+                    expected_filename_pattern=doc_title if doc_title and doc_title != "Untitled" else None
+                )
 
-            if not downloaded_file:
-                result["error"] = "Download timeout or failed"
-                logger.error(result["error"])
-                return result
+                if not downloaded_file:
+                    result["error"] = "Download timeout or failed"
+                    logger.error(result["error"])
+                    return result
 
-            # Rename file if custom filename provided
+            finally:
+                try:
+                    if marker_file.exists():
+                        marker_file.unlink()
+                        logger.debug(f"Removed download marker: {marker_file.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove marker file: {e}")
+
+            # Verify filename matches doc title
+            if doc_title and doc_title != "Untitled" and (sanitized_title := re.sub(r'[<>:"/\\|?*]', '', doc_title)) not in downloaded_file.stem:
+                logger.warning(f"⚠️  Downloaded file name mismatch! Expected: '{sanitized_title}', Got: '{downloaded_file.stem}'. This may indicate wrong file match.")
+
+            # Rename if custom filename provided
             if output_filename:
-                if not output_filename.endswith(".docx"):
-                    output_filename += ".docx"
-
+                output_filename = output_filename if output_filename.endswith(".docx") else f"{output_filename}.docx"
                 final_path = self.download_dir / output_filename
-
-                # Handle duplicate filenames
                 counter = 1
                 while final_path.exists():
-                    name_without_ext = output_filename.rsplit(".docx", 1)[0]
-                    final_path = self.download_dir / f"{name_without_ext}_{counter}.docx"
+                    final_path = self.download_dir / f"{output_filename.rsplit('.docx', 1)[0]}_{counter}.docx"
                     counter += 1
-
                 downloaded_file.rename(final_path)
                 logger.info(f"Renamed to: {final_path.name}")
             else:
