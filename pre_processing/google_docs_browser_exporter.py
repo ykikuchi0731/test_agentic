@@ -220,43 +220,35 @@ class GoogleDocsBrowserExporter:
         logger.warning(f"Could not extract file ID from: {url}")
         return None
 
-    def _wait_for_download_complete(
-        self, expected_extension: str = ".docx", timeout: int = None, min_creation_time: float = None, expected_filename_pattern: str = None, marker_file: Path = None
+    def _wait_for_new_file(
+        self, initial_files: set, expected_extension: str = ".docx", timeout: int = None
     ) -> Optional[Path]:
         """
-        Wait for file download to complete.
+        Wait for a new file to appear using snapshot-based detection.
 
         Args:
+            initial_files: Set of files that existed before download started
             expected_extension: Expected file extension
             timeout: Timeout in seconds (uses self.timeout if not provided)
-            min_creation_time: Only consider files created after this timestamp (epoch time) - DEPRECATED, use marker_file instead
-            expected_filename_pattern: Optional pattern to match in filename (helps avoid wrong file matches)
-            marker_file: Unique marker file created before download - files created after this marker are candidates
 
         Returns:
             Path to downloaded file if successful, None otherwise
+
+        Note:
+            This method uses pure snapshot-based detection: compares current files against
+            the initial snapshot. The first new file with the expected extension is returned.
+            This avoids all timestamp comparison issues entirely.
         """
         timeout = timeout or self.timeout
-        logger.info(f"Waiting for download to complete (timeout: {timeout}s)...")
+        logger.info(f"Waiting for new {expected_extension} file (timeout: {timeout}s)...")
 
         start_time = time.time()
-        initial_files = set(self.download_dir.glob("*"))
-
-        # Get marker file creation time if provided (more reliable than timestamp)
-        marker_creation_time = None
-        if marker_file and marker_file.exists():
-            marker_creation_time = marker_file.stat().st_mtime
-            logger.debug(f"Using marker file created at {marker_creation_time}")
-        elif min_creation_time is not None:
-            # Fallback to min_creation_time for backward compatibility
-            marker_creation_time = min_creation_time
-            logger.debug(f"Using timestamp-based matching (legacy mode)")
 
         while time.time() - start_time < timeout:
             current_files = set(self.download_dir.glob("*"))
             new_files = current_files - initial_files
 
-            # Filter for completed files (not .crdownload, .tmp, .part, and not marker files)
+            # Filter for completed files (not .crdownload, .tmp, .part, not tracking files)
             completed_files = [
                 f
                 for f in new_files
@@ -264,35 +256,13 @@ class GoogleDocsBrowserExporter:
                 and not any(
                     f.name.endswith(ext) for ext in [".crdownload", ".tmp", ".part"]
                 )
-                and not f.name.startswith(".download_marker_")
+                and not f.name.endswith(".tracking.json")
             ]
 
-            # Further filter by marker creation time if specified
-            if marker_creation_time is not None:
-                completed_files = [
-                    f for f in completed_files
-                    if f.stat().st_mtime >= marker_creation_time
-                ]
-
-            # Further filter by expected filename pattern if specified
-            if expected_filename_pattern and completed_files:
-                import re
-                sanitized_pattern = re.sub(r'[<>:"/\\|?*]', '', expected_filename_pattern)
-                matched_files = [
-                    f for f in completed_files
-                    if sanitized_pattern in f.stem
-                ]
-                if matched_files:
-                    completed_files = matched_files
-                    logger.debug(f"Filtered {len(completed_files)} files matching pattern '{sanitized_pattern}'")
-                else:
-                    logger.warning(f"No files matched expected pattern '{sanitized_pattern}', using all {len(completed_files)} candidates")
-
             if completed_files:
-                # Sort by modification time (newest first) to get the most recently downloaded file
-                # This is critical when multiple downloads happen simultaneously
+                # If multiple files appear (rare), take the most recently modified
                 downloaded_file = sorted(completed_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
-                logger.info(f"✅ Download complete: {downloaded_file.name} (selected most recent from {len(completed_files)} new files)")
+                logger.info(f"✅ Download complete: {downloaded_file.name}")
                 return downloaded_file
 
             # Check for partial downloads
@@ -421,24 +391,24 @@ class GoogleDocsBrowserExporter:
             download_url = f"https://docs.google.com/document/d/{file_id}/export?format=docx"
             logger.info("Initiating download...")
 
-            # Create a unique marker file to identify downloads from THIS request
-            # This is much more reliable than timestamp-only matching
+            # Generate unique download ID for tracking
             import uuid
-            marker_id = str(uuid.uuid4())
-            marker_file = self.download_dir / f".download_marker_{marker_id}"
-            marker_file.touch()
-            logger.debug(f"Created download marker: {marker_file.name}")
+            import json
+            download_id = str(uuid.uuid4())
+
+            # Capture snapshot of existing files BEFORE download
+            initial_files = set(self.download_dir.glob("*.docx"))
+            logger.debug(f"Snapshot: {len(initial_files)} existing .docx files")
 
             try:
+                # Trigger download
                 self.driver.get(download_url)
 
-                # Wait for download to complete
-                # Pass marker file and doc_title for accurate matching
-                downloaded_file = self._wait_for_download_complete(
+                # Wait for new .docx file to appear
+                downloaded_file = self._wait_for_new_file(
+                    initial_files=initial_files,
                     expected_extension=".docx",
-                    timeout=self.timeout,
-                    marker_file=marker_file,
-                    expected_filename_pattern=doc_title if doc_title and doc_title != "Untitled" else None
+                    timeout=self.timeout
                 )
 
                 if not downloaded_file:
@@ -446,13 +416,26 @@ class GoogleDocsBrowserExporter:
                     logger.error(result["error"])
                     return result
 
-            finally:
+                # Create tracking metadata file immediately after download completes
+                # This associates the downloaded file with the request parameters
+                tracking_file = self.download_dir / f"{downloaded_file.name}.tracking.json"
+                tracking_data = {
+                    "download_id": download_id,
+                    "file_id": file_id,
+                    "doc_title": doc_title,
+                    "downloaded_filename": downloaded_file.name,
+                    "download_timestamp": time.time()
+                }
                 try:
-                    if marker_file.exists():
-                        marker_file.unlink()
-                        logger.debug(f"Removed download marker: {marker_file.name}")
+                    tracking_file.write_text(json.dumps(tracking_data, indent=2))
+                    logger.debug(f"Created tracking file: {tracking_file.name}")
                 except Exception as e:
-                    logger.warning(f"Failed to remove marker file: {e}")
+                    logger.warning(f"Failed to create tracking file: {e}")
+
+            except Exception as e:
+                result["error"] = f"Download failed: {e}"
+                logger.error(result["error"], exc_info=True)
+                return result
 
             # Verify filename matches doc title
             if doc_title and doc_title != "Untitled" and (sanitized_title := re.sub(r'[<>:"/\\|?*]', '', doc_title)) not in downloaded_file.stem:
@@ -466,6 +449,17 @@ class GoogleDocsBrowserExporter:
                 while final_path.exists():
                     final_path = self.download_dir / f"{output_filename.rsplit('.docx', 1)[0]}_{counter}.docx"
                     counter += 1
+
+                # Move tracking file along with the renamed file
+                old_tracking_file = self.download_dir / f"{downloaded_file.name}.tracking.json"
+                new_tracking_file = self.download_dir / f"{final_path.name}.tracking.json"
+                if old_tracking_file.exists():
+                    try:
+                        old_tracking_file.rename(new_tracking_file)
+                        logger.debug(f"Moved tracking file: {new_tracking_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to move tracking file: {e}")
+
                 downloaded_file.rename(final_path)
                 logger.info(f"Renamed to: {final_path.name}")
             else:

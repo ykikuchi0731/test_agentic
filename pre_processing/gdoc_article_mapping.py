@@ -1,12 +1,102 @@
-"""Extract Google Docs mapping from migration logs."""
+"""Extract Google Docs mapping from migration logs and tracking files."""
 import re
 import csv
+import json
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def extract_gdoc_mapping_from_tracking_files(download_dir: str, log_file_path: str = None) -> Tuple[List[Dict[str, str]], set]:
+    """
+    Extract Google Docs mapping from tracking files (primary source of truth).
+
+    Each downloaded file has a companion .tracking.json file that contains:
+    - download_id: Unique ID for this download
+    - file_id: Google Docs file ID
+    - doc_title: Document title
+    - downloaded_filename: Name of the downloaded file
+    - download_timestamp: When the download completed
+
+    To get the article information, we parse the log file for context.
+
+    Args:
+        download_dir: Directory containing downloaded files and tracking files
+        log_file_path: Optional path to log file for article context
+
+    Returns:
+        Tuple of (mappings list, set of processed file_ids)
+    """
+    download_path = Path(download_dir)
+    if not download_path.exists():
+        logger.warning(f"Download directory not found: {download_dir}")
+        return [], set()
+
+    mappings = []
+    processed_file_ids = set()
+
+    # Build file_id -> article mapping from log if available
+    file_id_to_article = {}
+    if log_file_path:
+        log_path = Path(log_file_path)
+        if log_path.exists():
+            pattern = re.compile(
+                r"(Downloaded Google Doc|Failed to download Google Doc): '([^']+)' \| File: ([^\|]+) \| URL: https://docs\.google\.com/document/d/([^/]+)/edit \| Article: ([^\n|]+)"
+            )
+            with open(log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    match = pattern.search(line)
+                    if match:
+                        file_id = match.group(4).strip()
+                        article = match.group(5).strip()
+                        file_id_to_article[file_id] = article
+
+    # Process all tracking files
+    tracking_files = list(download_path.glob("*.tracking.json"))
+    logger.info(f"Found {len(tracking_files)} tracking files in {download_dir}")
+
+    for tracking_file in tracking_files:
+        try:
+            with open(tracking_file, 'r', encoding='utf-8') as f:
+                tracking_data = json.load(f)
+
+            file_id = tracking_data.get('file_id')
+            downloaded_filename = tracking_data.get('downloaded_filename')
+            doc_title = tracking_data.get('doc_title', 'Unknown')
+
+            if not file_id or not downloaded_filename:
+                logger.warning(f"Incomplete tracking data in {tracking_file.name}")
+                continue
+
+            # Check if file actually exists
+            downloaded_file = download_path / downloaded_filename
+            if not downloaded_file.exists():
+                logger.warning(f"Tracked file does not exist: {downloaded_filename}")
+                continue
+
+            # Get article info from log mapping
+            article = file_id_to_article.get(file_id, 'Unknown')
+            url = f"https://docs.google.com/document/d/{file_id}/edit"
+
+            mappings.append({
+                'File': downloaded_filename,
+                'URL': url,
+                'Article': article,
+                'Status': 'Success',
+                'Error': ''
+            })
+
+            processed_file_ids.add(file_id)
+
+        except Exception as e:
+            logger.error(f"Error processing tracking file {tracking_file.name}: {e}")
+            continue
+
+    logger.info(f"Extracted {len(mappings)} mappings from tracking files")
+    return mappings, processed_file_ids
 
 
 def extract_gdoc_mapping_from_log(log_file_path: str) -> List[Dict[str, str]]:
@@ -187,13 +277,17 @@ def save_mapping_to_csv(mappings: List[Dict[str, str]], output_path: str) -> str
     return str(output_file)
 
 
-def main(log_file: str, output_file: str = None) -> Dict[str, Any]:
+def main(log_file: str, output_file: str = None, download_dir: str = 'download') -> Dict[str, Any]:
     """
     Main function to extract and save Google Docs mapping.
+
+    Uses tracking files as the primary source of truth (deterministic),
+    with log parsing as fallback for failed downloads.
 
     Args:
         log_file: Path to migration log file
         output_file: Optional output CSV path (auto-generated if not provided)
+        download_dir: Directory containing downloaded files and tracking files
 
     Returns:
         Dictionary with results
@@ -205,11 +299,34 @@ def main(log_file: str, output_file: str = None) -> Dict[str, Any]:
         output_dir.mkdir(exist_ok=True)
         output_file = str(output_dir / f'gdoc_article_mapping_{timestamp}.csv')
 
-    # Extract mappings from log
-    mappings = extract_gdoc_mapping_from_log(log_file)
+    # Extract mappings from tracking files (primary source - deterministic)
+    mappings_from_tracking, processed_file_ids = extract_gdoc_mapping_from_tracking_files(
+        download_dir, log_file
+    )
+    logger.info(f"Extracted {len(mappings_from_tracking)} successful downloads from tracking files")
 
-    if not mappings:
-        logger.warning("No Google Docs mappings found in log file")
+    # Extract additional mappings from log (for failed downloads)
+    mappings_from_log = extract_gdoc_mapping_from_log(log_file)
+
+    # Filter log mappings to only include:
+    # 1. Failed downloads (not in tracking files)
+    # 2. Successful downloads not already in tracking files (shouldn't happen but just in case)
+    additional_mappings = [
+        m for m in mappings_from_log
+        if m['Status'] == 'Failed' or (
+            # Extract file_id from URL to check if already processed
+            (file_id := m['URL'].split('/d/')[-1].split('/')[0]) and
+            file_id not in processed_file_ids
+        )
+    ]
+
+    logger.info(f"Found {len(additional_mappings)} additional entries from log (failed downloads)")
+
+    # Combine mappings: tracking files first (authoritative), then log entries
+    all_mappings = mappings_from_tracking + additional_mappings
+
+    if not all_mappings:
+        logger.warning("No Google Docs mappings found")
         return {
             'success': False,
             'error': 'No Google Docs mappings found',
@@ -217,18 +334,22 @@ def main(log_file: str, output_file: str = None) -> Dict[str, Any]:
         }
 
     # Save to CSV
-    csv_path = save_mapping_to_csv(mappings, output_file)
+    csv_path = save_mapping_to_csv(all_mappings, output_file)
 
     # Count success/failed
-    success_count = sum(1 for m in mappings if m['Status'] == 'Success')
-    failed_count = sum(1 for m in mappings if m['Status'] == 'Failed')
+    success_count = sum(1 for m in all_mappings if m['Status'] == 'Success')
+    failed_count = sum(1 for m in all_mappings if m['Status'] == 'Failed')
+
+    logger.info(f"Total: {len(all_mappings)} mappings ({success_count} successful, {failed_count} failed)")
 
     return {
         'success': True,
         'csv_path': csv_path,
-        'count': len(mappings),
+        'count': len(all_mappings),
         'success_count': success_count,
-        'failed_count': failed_count
+        'failed_count': failed_count,
+        'tracking_file_count': len(mappings_from_tracking),
+        'log_only_count': len(additional_mappings)
     }
 
 
@@ -237,7 +358,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Extract Google Docs mapping from migration log'
+        description='Extract Google Docs mapping from tracking files and migration log'
     )
     parser.add_argument(
         'log_file',
@@ -246,6 +367,11 @@ if __name__ == '__main__':
     parser.add_argument(
         '--output',
         help='Output CSV file path (default: analysis_output/gdoc_article_mapping_TIMESTAMP.csv)'
+    )
+    parser.add_argument(
+        '--download-dir',
+        default='download',
+        help='Directory containing downloaded files and tracking files (default: download)'
     )
 
     args = parser.parse_args()
@@ -257,10 +383,13 @@ if __name__ == '__main__':
     )
 
     try:
-        result = main(args.log_file, args.output)
+        result = main(args.log_file, args.output, args.download_dir)
 
         if result['success']:
             print(f"\n✅ Successfully extracted {result['count']} Google Docs mappings")
+            print(f"   - From tracking files: {result['tracking_file_count']} (deterministic)")
+            print(f"   - From log (failed): {result['log_only_count']}")
+            print(f"   - Success: {result['success_count']}, Failed: {result['failed_count']}")
             print(f"📄 CSV saved to: {result['csv_path']}")
         else:
             print(f"\n❌ {result['error']}")
