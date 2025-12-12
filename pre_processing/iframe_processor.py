@@ -1,6 +1,7 @@
 """Process iframe-embedded Google Docs and Slides in HTML content."""
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -186,21 +187,37 @@ class IframeProcessor:
             return result
 
         try:
+            # Capture file_id immediately to prevent mutation issues
+            requested_file_id = iframe_info['file_id']
+
             # Download Google Doc with its original name (don't rename)
             logger.info(
-                f"Downloading Google Doc: {iframe_info['file_id']}"
+                f"Downloading Google Doc: {requested_file_id}"
             )
 
             # Download using browser exporter (keeps original Google Doc title as filename)
             export_result = self.google_docs_exporter.export_single_document(
-                iframe_info["file_id"], output_filename=None
+                requested_file_id, output_filename=None
             )
+
+            # Build doc_url (used in all code paths)
+            doc_url = f"https://docs.google.com/document/d/{requested_file_id}/edit"
 
             # Log the download result with Google Doc link
             if export_result["success"]:
                 doc_title = export_result.get("title", "Unknown")
-                doc_url = f"https://docs.google.com/document/d/{iframe_info['file_id']}/edit"
                 downloaded_path = Path(export_result["file_path"])
+
+                # Verify the download matches what was requested
+                # Check if file already exists (indicating it might be from a previous download)
+                if downloaded_path.exists():
+                    # Check file age - if it's more than 5 seconds old, it might be from a previous attempt
+                    file_age = time.time() - downloaded_path.stat().st_mtime
+                    if file_age > 5:
+                        logger.warning(
+                            f"⚠️  Downloaded file is {file_age:.1f}s old - may be from a previous download. "
+                            f"Requested: {requested_file_id}, File: {downloaded_path.name}"
+                        )
 
                 logger.info(
                     f"Downloaded Google Doc: '{doc_title}' | "
@@ -213,7 +230,7 @@ class IframeProcessor:
             article_context = f"Article: {article_number or 'unknown'}"
             if article_title and article_title != "document":
                 article_context += f" ({article_title})"
-            doc_context = f"Google Doc ID: {iframe_info['file_id']}"
+            doc_context = f"Google Doc ID: {requested_file_id}"
 
             if export_result["success"]:
                 result["success"] = True
@@ -226,19 +243,25 @@ class IframeProcessor:
                 )
             else:
                 result["error"] = export_result.get("error", "Unknown error")
+
+                # Log in structured format for mapping extraction
                 logger.error(
-                    f"❌ Failed to download Google Doc: {result['error']} | "
-                    f"{article_context} | {doc_context}"
+                    f"❌ Failed to download Google Doc: '{export_result.get('title', 'Unknown')}' | "
+                    f"File: N/A | "
+                    f"URL: {doc_url} | "
+                    f"Article: {article_number} ({article_title}) | "
+                    f"Error: {result['error']}"
                 )
 
         except Exception as e:
             result["error"] = f"Exception during download: {e}"
-            article_context = f"Article: {article_number or 'unknown'}"
-            if article_title and article_title != "document":
-                article_context += f" ({article_title})"
+            # Log in structured format for mapping extraction
             logger.error(
-                f"❌ Error processing Google Docs iframe: {e} | "
-                f"{article_context} | Google Doc ID: {iframe_info.get('file_id', 'unknown')}"
+                f"❌ Failed to download Google Doc: 'Unknown' | "
+                f"File: N/A | "
+                f"URL: {doc_url} | "
+                f"Article: {article_number or 'unknown'} ({article_title}) | "
+                f"Error: {e}"
             )
 
         return result
@@ -393,6 +416,7 @@ class IframeProcessor:
         summary = {
             "iframes_found": 0,
             "docs_downloaded": [],
+            "docs_failed": [],
             "slides_converted": [],
             "other_converted": [],
             "errors": [],
@@ -452,7 +476,9 @@ class IframeProcessor:
                         doc_info = {
                             "file_path": result["file_path"],
                             "doc_id": file_id,
-                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit"
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit",
+                            "article_number": article_number,
+                            "article_title": article_title
                         }
                         summary["docs_downloaded"].append(doc_info)
                         downloaded_doc_ids.add(file_id)  # Mark as downloaded
@@ -462,6 +488,15 @@ class IframeProcessor:
                             iframe_element.decompose()
                             logger.info("Removed Google Docs iframe from HTML")
                     else:
+                        # Store failed download with structured information
+                        failed_doc_info = {
+                            "doc_id": file_id,
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit",
+                            "article_number": article_number,
+                            "article_title": article_title,
+                            "error": result['error']
+                        }
+                        summary["docs_failed"].append(failed_doc_info)
                         summary["errors"].append(
                             f"Google Docs {iframe_info['file_id']}: {result['error']}"
                         )
@@ -611,6 +646,7 @@ class IframeProcessor:
                 "html": original_html,
                 "summary": None,
                 "downloaded_docs": [],
+                "failed_docs": [],
             },
             "translations": [],
             "total_downloads": 0,
@@ -646,6 +682,7 @@ class IframeProcessor:
             result["original"]["html"] = processed_html
             result["original"]["summary"] = summary
             result["original"]["downloaded_docs"] = summary["docs_downloaded"]
+            result["original"]["failed_docs"] = summary["docs_failed"]
             result["total_downloads"] += len(summary["docs_downloaded"])
 
         # Process translations
@@ -679,6 +716,7 @@ class IframeProcessor:
                         "html": processed_trans_html,
                         "summary": trans_summary,
                         "downloaded_docs": trans_summary["docs_downloaded"],
+                        "failed_docs": trans_summary["docs_failed"],
                     })
 
                     result["total_downloads"] += len(trans_summary["docs_downloaded"])
@@ -726,6 +764,7 @@ class IframeProcessor:
         summary = {
             "iframes_found": 0,
             "docs_downloaded": [],
+            "docs_failed": [],
             "slides_converted": [],
             "other_converted": [],
             "errors": [],
@@ -779,12 +818,29 @@ class IframeProcessor:
                     )
 
                     if result["success"]:
-                        summary["docs_downloaded"].append(result["file_path"])
+                        # Store structured doc info
+                        doc_info = {
+                            "file_path": result["file_path"],
+                            "doc_id": file_id,
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit",
+                            "article_number": article_number,
+                            "article_title": article_title
+                        }
+                        summary["docs_downloaded"].append(doc_info)
                         downloaded_doc_ids.add(file_id)  # Mark as downloaded
 
                         if result["should_remove_html"]:
                             iframe_element.decompose()
                     else:
+                        # Store failed download with structured information
+                        failed_doc_info = {
+                            "doc_id": file_id,
+                            "doc_url": f"https://docs.google.com/document/d/{file_id}/edit",
+                            "article_number": article_number,
+                            "article_title": article_title,
+                            "error": result['error']
+                        }
+                        summary["docs_failed"].append(failed_doc_info)
                         summary["errors"].append(
                             f"Google Docs {iframe_info['file_id']}: {result['error']}"
                         )
