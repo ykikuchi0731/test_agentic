@@ -39,33 +39,60 @@ class DownloadManager:
             logger.debug(f"Acquired download lock for {file_id}")
             initial_files = set(self.download_dir.glob("*.docx"))
 
+            # Enable Chrome DevTools Protocol network monitoring
+            try:
+                driver.execute_cdp_cmd('Network.enable', {})
+            except Exception as e:
+                logger.debug(f"Could not enable CDP network monitoring: {e}")
+
             try:
                 driver.get(download_url)
             except Exception as e:
                 logger.error(f"Failed to navigate to download URL: {e}")
                 return None
 
-            # Check for HTTP error pages (403, 404, etc.) immediately after page load
-            # This prevents waiting the full timeout for permission/access errors
-            time.sleep(0.5)  # Brief wait for page to render
+            # Check HTTP status code using Chrome DevTools Protocol
+            # This is more reliable than content inspection - no false positives
             try:
-                page_title = driver.title.lower()
-                page_source = driver.page_source.lower()
+                # Get performance logs which contain network events
+                logs = driver.get_log('performance')
 
-                # Detect Google error pages
-                error_indicators = [
-                    ('403', 'forbidden', 'permission'),
-                    ('404', 'not found'),
-                    ('error', 'sorry'),
-                    ('access denied', 'no access')
-                ]
+                for entry in logs:
+                    try:
+                        log = json.loads(entry['message'])
+                        message = log.get('message', {})
 
-                for indicators in error_indicators:
-                    if any(ind in page_title or ind in page_source[:2000] for ind in indicators):
-                        logger.error(f"HTTP error detected for {file_id}: Page title/content indicates error ({indicators[0]})")
-                        return None
+                        # Look for Network.responseReceived events
+                        if message.get('method') == 'Network.responseReceived':
+                            params = message.get('params', {})
+                            response = params.get('response', {})
+                            response_url = response.get('url', '')
+
+                            # Check if this is the response for our download URL
+                            if file_id in response_url and 'export' in response_url:
+                                status_code = response.get('status', 0)
+
+                                # Check for HTTP error status codes
+                                if status_code >= 400:
+                                    error_msg = f"HTTP {status_code}"
+                                    if status_code == 403:
+                                        error_msg = "HTTP 403 Forbidden (Permission denied)"
+                                    elif status_code == 404:
+                                        error_msg = "HTTP 404 Not Found"
+                                    elif status_code == 401:
+                                        error_msg = "HTTP 401 Unauthorized"
+
+                                    logger.error(f"{error_msg} for {file_id}: {response_url}")
+                                    return None
+                                else:
+                                    logger.debug(f"HTTP {status_code} for {file_id}")
+                                break
+                    except (json.JSONDecodeError, KeyError) as e:
+                        continue
+
             except Exception as e:
-                logger.debug(f"Could not check for error page: {e}")
+                logger.debug(f"Could not check HTTP status via CDP: {e}")
+                # If CDP check fails, proceed with download attempt anyway
 
             start_time = time.time()
             while time.time() - start_time < timeout:
@@ -145,6 +172,8 @@ class GoogleDocsBrowserExporter:
                 "profile.default_content_settings.popups": 0,
                 "profile.default_content_setting_values.automatic_downloads": 1,
             })
+            # Enable performance logging for HTTP status code detection via CDP
+            options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
             if self.headless:
                 options.add_argument("--headless=new")
                 options.add_argument("--disable-gpu")
