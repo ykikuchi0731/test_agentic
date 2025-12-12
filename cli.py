@@ -63,8 +63,7 @@ def init_servicenow_client():
 def print_separator(title=None, char="="):
     """Print a separator line with optional title."""
     if title:
-        print(char * 80)
-        print(title)
+        print(f"{char * 80}\n{title}")
     print(char * 80)
 
 
@@ -72,38 +71,29 @@ def print_result_summary(result, success_msg, fail_msg):
     """Print standardized result summary."""
     if result and result.get('zip_created'):
         print(f"\n✅ {success_msg}")
-        if result.get('zip_path'):
-            print(f"Export ZIP: {result['zip_path']}")
-        if result.get('csv_path'):
-            print(f"Article list: {result['csv_path']}")
+        if zip_path := result.get('zip_path'):
+            print(f"Export ZIP: {zip_path}")
+        if csv_path := result.get('csv_path'):
+            print(f"Article list: {csv_path}")
         print(f"Total articles exported: {result.get('total_articles', 0)}")
         return 0
-
     print(f"\n❌ {fail_msg}")
-    if result and result.get('errors'):
-        print(f"Errors: {result['errors']}")
+    if result and (errors := result.get('errors')):
+        print(f"Errors: {errors}")
     return 1
 
 
 def flatten_hierarchy(nodes, rows=None):
     """Flatten category hierarchy tree into list of rows for CSV export."""
-    if rows is None:
-        rows = []
-
+    rows = rows or []
     for node in nodes:
-        rows.append({
-            'name': node['name'],
-            'full_path': node['full_path'],
-            'parent': node['parent'] or '(root)',
-            'ancestors': ' > '.join(node['ancestors']) if node['ancestors'] else '(none)',
-            'level': node['level'],
-            'article_count': node['article_count'],
-            'total_article_count': node['total_article_count']
-        })
-
+        rows.append({'name': node['name'], 'full_path': node['full_path'],
+                    'parent': node['parent'] or '(root)',
+                    'ancestors': ' > '.join(node['ancestors']) if node['ancestors'] else '(none)',
+                    'level': node['level'], 'article_count': node['article_count'],
+                    'total_article_count': node['total_article_count']})
         if node.get('children'):
             flatten_hierarchy(node['children'], rows)
-
     return rows
 
 
@@ -117,8 +107,6 @@ def cmd_migrate(args):
     from pre_processing.google_docs_browser_exporter import GoogleDocsBrowserExporter
 
     print_separator("ServiceNow Knowledge Base Export")
-
-    # Validate configuration and initialize client
     try:
         sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
@@ -126,73 +114,44 @@ def cmd_migrate(args):
         return 1
 
     with sn_client:
-
-        # Get all articles
         logger.info("Fetching articles from ServiceNow...")
         articles = kb.get_latest_articles_only()
 
-        # Apply filters
         filters = CommonCLI.parse_filters(args.filter)
         if filters or args.kb_base:
             articles = CommonCLI.filter_articles(articles, filters, args.kb_base)
             logger.info(f"Filtered to {len(articles)} articles")
 
-        # Apply limit and offset
         articles = CommonCLI.apply_limit_offset(articles, args.limit, args.offset)
         logger.info(f"Processing {len(articles)} articles (offset: {args.offset})")
 
         if args.dry_run:
             print("\n[DRY RUN] Would process the following articles:")
-            CommonCLI.print_summary(
-                "Articles to Process",
-                articles,
-                ['number', 'short_description', 'kb_category']
-            )
+            CommonCLI.print_summary("Articles to Process", articles, ['number', 'short_description', 'kb_category'])
             return 0
 
-        # Initialize Google Docs exporter if requested
-        google_docs_exporter = None
-        if args.process_iframes:
-            google_docs_exporter = GoogleDocsBrowserExporter(
-                headless=not args.browser_gui if hasattr(args, 'browser_gui') else True
-            )
+        google_docs_exporter = (GoogleDocsBrowserExporter(headless=not getattr(args, 'browser_gui', False))
+                               if args.process_iframes else None)
 
-        # Initialize migrator
-        migrator = MigrationOrchestrator(
-            servicenow_kb=kb,
-            output_dir=Config.MIGRATION_OUTPUT_DIR,
-            google_docs_exporter=google_docs_exporter,
-            process_iframes=args.process_iframes,
-            max_workers=args.workers if hasattr(args, 'workers') else 4,
-            rate_limit_delay=args.rate_limit if hasattr(args, 'rate_limit') else 0.0,
-            max_articles_per_zip=args.max_per_zip if hasattr(args, 'max_per_zip') else 300
-        )
+        migrator = MigrationOrchestrator(servicenow_kb=kb, output_dir=Config.MIGRATION_OUTPUT_DIR,
+            google_docs_exporter=google_docs_exporter, process_iframes=args.process_iframes,
+            max_workers=getattr(args, 'workers', 4), rate_limit_delay=getattr(args, 'rate_limit', 0.0),
+            max_articles_per_zip=getattr(args, 'max_per_zip', 300))
 
-        # Show configuration
         print(f"Parallel workers: {args.workers}")
         if args.rate_limit > 0:
             print(f"Rate limit: {args.rate_limit}s delay between requests")
-        if args.process_iframes:
-            browser_mode = "GUI mode" if hasattr(args, 'browser_gui') and args.browser_gui else "headless mode"
-            print(f"Iframe processing (Google Docs export): Enabled ({browser_mode})")
-        else:
-            print(f"Iframe processing (Google Docs export): Disabled")
+        browser_mode = "GUI mode" if getattr(args, 'browser_gui', False) else "headless mode"
+        status = f"Enabled ({browser_mode})" if args.process_iframes else "Disabled"
+        print(f"Iframe processing (Google Docs export): {status}")
         print(f"Max articles per ZIP: {args.max_per_zip}")
-
         if args.category:
             print(f"Including only articles under category: {args.category}")
         if args.exclude_category:
             print(f"Excluding articles under category: {args.exclude_category}")
 
-        # Run migration
-        result = migrator.export_all_to_zip(
-            query=args.filter,
-            zip_filename=None,
-            limit=args.limit,
-            category_filter=args.category if hasattr(args, 'category') else None,
-            exclude_category=args.exclude_category if hasattr(args, 'exclude_category') else None
-        )
-
+        result = migrator.export_all_to_zip(query=args.filter, zip_filename=None, limit=args.limit,
+            category_filter=getattr(args, 'category', None), exclude_category=getattr(args, 'exclude_category', None))
         return print_result_summary(result, "Export completed successfully!", "Export failed!")
 
 
@@ -201,8 +160,6 @@ def cmd_export_list(args):
     from pre_processing.article_list_exporter import ArticleListExporter
 
     print_separator("Export Article List (Metadata Only)")
-
-    # Validate configuration and initialize client
     try:
         sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
@@ -210,37 +167,21 @@ def cmd_export_list(args):
         return 1
 
     with sn_client:
-
-        # Initialize exporter
-        exporter = ArticleListExporter(
-            servicenow_kb=kb,
-            output_dir=args.output or Config.MIGRATION_OUTPUT_DIR
-        )
-
-        # Parse filters
+        exporter = ArticleListExporter(servicenow_kb=kb, output_dir=args.output or Config.MIGRATION_OUTPUT_DIR)
         filters = CommonCLI.parse_filters(args.filter)
         category_filter = filters.get('category') if filters else None
 
         if args.dry_run:
-            print("\n[DRY RUN] Would export article list")
-            print(f"  Limit: {args.limit if args.limit else 'all'}")
-            print(f"  Category filter: {category_filter if category_filter else 'none'}")
-            print(f"  Format: {args.format}")
+            print(f"\n[DRY RUN] Would export article list\n  Limit: {args.limit or 'all'}\n"
+                  f"  Category filter: {category_filter or 'none'}\n  Format: {args.format}")
             return 0
 
-        # Collect metadata (this handles filtering and limiting internally)
         logger.info("Collecting article metadata...")
-        article_metadata = exporter.collect_article_metadata(
-            limit=args.limit,
-            category_filter=category_filter
-        )
-
+        article_metadata = exporter.collect_article_metadata(limit=args.limit, category_filter=category_filter)
         logger.info(f"Exporting {len(article_metadata)} articles")
 
-        # Export based on format
         output_path = (exporter.export_to_csv(article_metadata) if args.format == 'csv'
                        else exporter.export_to_json(article_metadata))
-
         print(f"\n✅ Exported {len(article_metadata)} articles to: {output_path}")
         return 0
 
@@ -269,49 +210,27 @@ def cmd_convert_tables(args):
     from pre_processing.convert_table_column import main as convert_tables_main
 
     print_separator("Convert Tables to Column Blocks")
-
-    # Setup logging
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False)
-    )
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False))
 
     directory = Path(args.directory)
-
     if not directory.exists():
         logger.error(f"Directory not found: {directory}")
         return 1
-
     if not directory.is_dir():
         logger.error(f"Path is not a directory: {directory}")
         return 1
 
-    logger.info(f"Directory: {directory}")
-    logger.info(f"Recursive: {args.recursive}")
-    logger.info(f"Dry run: {args.dry_run}")
+    logger.info(f"Directory: {directory}\nRecursive: {args.recursive}\nDry run: {args.dry_run}")
 
     try:
-        stats = convert_tables_main(
-            directory=directory,
-            recursive=args.recursive,
-            dry_run=args.dry_run
-        )
-
-        print("\n" + "=" * 80)
-        if args.dry_run:
-            print("DRY RUN - No files were modified")
-        elif stats['files_modified'] > 0:
-            print("✅ Conversion completed!")
-        else:
-            print("No tables with images found")
-        print("=" * 80)
-        print(f"Files scanned:    {stats['files_scanned']}")
-        print(f"Files modified:   {stats['files_modified']}")
-        print(f"Tables converted: {stats['tables_converted']}")
-        print(f"Tables skipped:   {stats['tables_skipped']}")
-
+        stats = convert_tables_main(directory=directory, recursive=args.recursive, dry_run=args.dry_run)
+        print(f"\n{'=' * 80}")
+        msg = "DRY RUN - No files were modified" if args.dry_run else (
+              "✅ Conversion completed!" if stats['files_modified'] > 0 else "No tables with images found")
+        print(f"{msg}\n{'=' * 80}\nFiles scanned:    {stats['files_scanned']}\n"
+              f"Files modified:   {stats['files_modified']}\nTables converted: {stats['tables_converted']}\n"
+              f"Tables skipped:   {stats['tables_skipped']}")
         return 0
-
     except Exception as e:
         logger.error(f"Conversion failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -324,57 +243,33 @@ def cmd_scan_invisible(args):
     from datetime import datetime
 
     print_separator("Scan Invisible Elements")
-
-    # Setup logging
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False),
-        log_prefix='scan_invisible'
-    )
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False),
+                           log_prefix='scan_invisible')
 
     directory = Path(args.directory)
-
-    # Use --output if provided, otherwise generate default filename in analysis_output
     if args.output:
         output_csv = Path(args.output)
     else:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = Path('analysis_output')
         output_dir.mkdir(exist_ok=True)
-        output_csv = output_dir / f'div_accshow_{timestamp}.csv'
+        output_csv = output_dir / f"div_accshow_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     if not directory.exists():
         logger.error(f"Directory not found: {directory}")
         return 1
-
     if not directory.is_dir():
         logger.error(f"Path is not a directory: {directory}")
         return 1
 
-    logger.info(f"Directory: {directory}")
-    logger.info(f"Output CSV: {output_csv}")
-    logger.info(f"Recursive: {args.recursive}")
+    logger.info(f"Directory: {directory}\nOutput CSV: {output_csv}\nRecursive: {args.recursive}")
 
     try:
-        stats = scan_invisible_main(
-            directory=directory,
-            output_csv=output_csv,
-            recursive=args.recursive
-        )
-
-        print("\n" + "=" * 80)
-        if stats['invisible_elements'] > 0:
-            print("✅ Scan completed!")
-        else:
-            print("No invisible elements found")
-        print("=" * 80)
-        print(f"Files scanned:        {stats['files_scanned']}")
-        print(f"Files with invisible: {stats['files_with_invisible']}")
-        print(f"Invisible elements:   {stats['invisible_elements']}")
-        print(f"\n📄 Report saved to: {output_csv}")
-
+        stats = scan_invisible_main(directory=directory, output_csv=output_csv, recursive=args.recursive)
+        msg = "✅ Scan completed!" if stats['invisible_elements'] > 0 else "No invisible elements found"
+        print(f"\n{'=' * 80}\n{msg}\n{'=' * 80}\nFiles scanned:        {stats['files_scanned']}\n"
+              f"Files with invisible: {stats['files_with_invisible']}\nInvisible elements:   {stats['invisible_elements']}\n"
+              f"\n📄 Report saved to: {output_csv}")
         return 0
-
     except Exception as e:
         logger.error(f"Scan failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -387,62 +282,35 @@ def cmd_scan_empty_wrappers(args):
     from datetime import datetime
 
     print_separator("Scan Empty List Wrappers")
-
-    # Setup logging
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False),
-        log_prefix='scan_empty_wrappers'
-    )
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False),
+                           log_prefix='scan_empty_wrappers')
 
     directory = Path(args.directory)
-
-    # Use --output if provided, otherwise generate default filename in analysis_output
     if args.output:
         output_csv = Path(args.output)
     else:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_dir = Path('analysis_output')
         output_dir.mkdir(exist_ok=True)
-        output_csv = output_dir / f'empty_list_wrappers_{timestamp}.csv'
+        output_csv = output_dir / f"empty_list_wrappers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     if not directory.exists():
         logger.error(f"Directory not found: {directory}")
         return 1
-
     if not directory.is_dir():
         logger.error(f"Path is not a directory: {directory}")
         return 1
 
-    logger.info(f"Directory: {directory}")
-    logger.info(f"Output CSV: {output_csv}")
-    logger.info(f"Recursive: {args.recursive}")
-    logger.info(f"Min nesting depth: {args.min_depth}")
-    logger.info(f"Min wrapper count: {args.min_count}")
+    logger.info(f"Directory: {directory}\nOutput CSV: {output_csv}\nRecursive: {args.recursive}\n"
+               f"Min nesting depth: {args.min_depth}\nMin wrapper count: {args.min_count}")
 
     try:
-        stats = scan_wrappers_main(
-            directory=directory,
-            output_csv=output_csv,
-            recursive=args.recursive,
-            min_nesting_depth=args.min_depth,
-            min_wrapper_count=args.min_count
-        )
-
-        print("\n" + "=" * 80)
-        if stats['total_empty_wrappers'] > 0:
-            print("✅ Scan completed!")
-        else:
-            print("No empty list wrappers found")
-        print("=" * 80)
-        print(f"Files scanned:        {stats['files_scanned']}")
-        print(f"Files with wrappers:  {stats['files_with_wrappers']}")
-        print(f"Wrapper chains:       {stats['total_wrapper_chains']}")
-        print(f"Total empty wrappers: {stats['total_empty_wrappers']}")
-        print(f"\n📄 Report saved to: {output_csv}")
-
+        stats = scan_wrappers_main(directory=directory, output_csv=output_csv, recursive=args.recursive,
+                                   min_nesting_depth=args.min_depth, min_wrapper_count=args.min_count)
+        msg = "✅ Scan completed!" if stats['total_empty_wrappers'] > 0 else "No empty list wrappers found"
+        print(f"\n{'=' * 80}\n{msg}\n{'=' * 80}\nFiles scanned:        {stats['files_scanned']}\n"
+              f"Files with wrappers:  {stats['files_with_wrappers']}\nWrapper chains:       {stats['total_wrapper_chains']}\n"
+              f"Total empty wrappers: {stats['total_empty_wrappers']}\n\n📄 Report saved to: {output_csv}")
         return 0
-
     except Exception as e:
         logger.error(f"Scan failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -452,15 +320,10 @@ def cmd_scan_empty_wrappers(args):
 def cmd_gdoc_mapping(args):
     """Extract Google Docs mapping from migration log and tracking files."""
     from pre_processing.gdoc_article_mapping import main as gdoc_mapping_main
-    from datetime import datetime
 
     print_separator("Extract Google Docs Mapping")
-
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False),
-        log_prefix='gdoc_mapping'
-    )
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False),
+                           log_prefix='gdoc_mapping')
 
     log_file = Path(args.log_file)
     download_dir = getattr(args, 'download_dir', 'download')
@@ -470,33 +333,18 @@ def cmd_gdoc_mapping(args):
         print(f"\n❌ Error: Log file not found: {log_file}")
         return 1
 
-    logger.info(f"Log file: {log_file}")
-    logger.info(f"Download directory: {download_dir}")
-    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+    logger.info(f"Log file: {log_file}\nDownload directory: {download_dir}\nOutput: {args.output or 'auto-generated'}")
 
     try:
-        result = gdoc_mapping_main(
-            log_file=str(log_file),
-            output_file=args.output,
-            download_dir=download_dir
-        )
-
-        print("\n" + "=" * 80)
+        result = gdoc_mapping_main(log_file=str(log_file), output_file=args.output, download_dir=download_dir)
+        msg = "✅ Successfully extracted Google Docs mappings" if result['success'] else f"❌ {result['error']}"
+        print(f"\n{'=' * 80}\n{msg}\n{'=' * 80}\nTotal mappings:   {result['count']}")
         if result['success']:
-            print("✅ Successfully extracted Google Docs mappings")
-        else:
-            print(f"❌ {result['error']}")
-        print("=" * 80)
-        print(f"Total mappings:   {result['count']}")
-        if result['success']:
-            print(f"  From tracking:  {result.get('tracking_file_count', 0)} (deterministic)")
-            print(f"  From log:       {result.get('log_only_count', 0)} (failed downloads)")
-            print(f"  Success:        {result['success_count']}")
-            print(f"  Failed:         {result['failed_count']}")
-            print(f"\n📄 CSV saved to: {result['csv_path']}")
-
+            print(f"  From tracking:  {result.get('tracking_file_count', 0)} (deterministic)\n"
+                  f"  From log:       {result.get('log_only_count', 0)} (failed downloads)\n"
+                  f"  Success:        {result['success_count']}\n  Failed:         {result['failed_count']}\n"
+                  f"\n📄 CSV saved to: {result['csv_path']}")
         return 0 if result['success'] else 1
-
     except Exception as e:
         logger.error(f"Extraction failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -508,54 +356,34 @@ def cmd_rename_gdoc(args):
     from pre_processing.rename_gdoc import main as rename_gdoc_main
 
     print_separator("Rename Google Docs Files")
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False),
+                           log_prefix='rename_gdoc')
 
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False),
-        log_prefix='rename_gdoc'
-    )
-
-    mapping_file = Path(args.mapping_file)
-    input_folder = Path(args.input_folder)
+    mapping_file, input_folder = Path(args.mapping_file), Path(args.input_folder)
 
     if not mapping_file.exists():
         logger.error(f"Mapping file not found: {mapping_file}")
         print(f"\n❌ Error: Mapping file not found: {mapping_file}")
         return 1
-
     if not input_folder.exists():
         logger.error(f"Input folder not found: {input_folder}")
         print(f"\n❌ Error: Input folder not found: {input_folder}")
         return 1
-
     if not input_folder.is_dir():
         logger.error(f"Path is not a directory: {input_folder}")
         print(f"\n❌ Error: Path is not a directory: {input_folder}")
         return 1
 
-    logger.info(f"Mapping file: {mapping_file}")
-    logger.info(f"Input folder: {input_folder}")
-    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+    logger.info(f"Mapping file: {mapping_file}\nInput folder: {input_folder}\nOutput: {args.output or 'auto-generated'}")
 
     try:
-        result = rename_gdoc_main(
-            mapping_file_path=str(mapping_file),
-            input_folder=str(input_folder),
-            output_file=args.output
-        )
-
+        result = rename_gdoc_main(mapping_file_path=str(mapping_file), input_folder=str(input_folder),
+                                 output_file=args.output)
         stats = result['stats']
-        print("\n" + "=" * 80)
-        print("✅ Google Docs Renaming Complete")
-        print("=" * 80)
-        print(f"Total files:      {stats['total']}")
-        print(f"Renamed:          {stats['renamed']}")
-        print(f"Not found:        {stats['not_found']}")
-        print(f"Failed:           {stats['failed']}")
-        print(f"\n📄 Report saved to: {result['csv_path']}")
-
+        print(f"\n{'=' * 80}\n✅ Google Docs Renaming Complete\n{'=' * 80}\nTotal files:      {stats['total']}\n"
+              f"Renamed:          {stats['renamed']}\nNot found:        {stats['not_found']}\n"
+              f"Failed:           {stats['failed']}\n\n📄 Report saved to: {result['csv_path']}")
         return 0
-
     except Exception as e:
         logger.error(f"Renaming failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -567,52 +395,32 @@ def cmd_remove_toc(args):
     from pre_processing.remove_toc import main as remove_toc_main
 
     print_separator("Remove TOC Elements")
-
-    CommonCLI.setup_logging(
-        verbose=getattr(args, 'verbose', False),
-        quiet=getattr(args, 'quiet', False),
-        log_prefix='remove_toc'
-    )
+    CommonCLI.setup_logging(verbose=getattr(args, 'verbose', False), quiet=getattr(args, 'quiet', False),
+                           log_prefix='remove_toc')
 
     input_folder = Path(args.input_folder)
-
     if not input_folder.exists():
         logger.error(f"Folder not found: {input_folder}")
         print(f"\n❌ Error: Folder not found: {input_folder}")
         return 1
-
     if not input_folder.is_dir():
         logger.error(f"Path is not a directory: {input_folder}")
         print(f"\n❌ Error: Path is not a directory: {input_folder}")
         return 1
 
-    logger.info(f"Input folder: {input_folder}")
-    logger.info(f"Recursive: {args.recursive}")
-    logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
+    logger.info(f"Input folder: {input_folder}\nRecursive: {args.recursive}\nOutput: {args.output or 'auto-generated'}")
 
     try:
-        result = remove_toc_main(
-            input_folder=str(input_folder),
-            output_file=args.output,
-            recursive=args.recursive
-        )
-
+        result = remove_toc_main(input_folder=str(input_folder), output_file=args.output, recursive=args.recursive)
         stats = result['stats']
-        print("\n" + "=" * 80)
-        print("✅ TOC Removal Complete")
-        print("=" * 80)
-        print(f"Total HTML files:     {stats['total_files']}")
-        print(f"Files with mce-toc:   {stats['files_with_toc']}")
-        print(f"Total TOC removed:    {stats['total_toc_removed']}")
-        print(f"Errors:               {stats['errors']}")
-
-        if result['csv_path']:
-            print(f"\n📄 Report saved to: {result['csv_path']}")
+        print(f"\n{'=' * 80}\n✅ TOC Removal Complete\n{'=' * 80}\nTotal HTML files:     {stats['total_files']}\n"
+              f"Files with mce-toc:   {stats['files_with_toc']}\nTotal TOC removed:    {stats['total_toc_removed']}\n"
+              f"Errors:               {stats['errors']}")
+        if csv_path := result['csv_path']:
+            print(f"\n📄 Report saved to: {csv_path}")
         else:
             print("\nNo mce-toc elements found in any files.")
-
         return 0
-
     except Exception as e:
         logger.error(f"TOC removal failed: {e}", exc_info=True)
         print(f"\n❌ Error: {e}")
@@ -624,7 +432,6 @@ def cmd_make_subitem(args):
     from post_processing.page_hierarchy import NotionPageHierarchy
 
     print_separator("Make Notion Page a Sub-Item")
-
     try:
         Config.validate_notion()
     except ConfigurationError as e:
@@ -635,29 +442,19 @@ def cmd_make_subitem(args):
         logger.error("Both --child and --parent page IDs are required")
         return 1
 
-    logger.info(f"Child page ID: {args.child}")
-    logger.info(f"Parent page ID: {args.parent}")
+    logger.info(f"Child page ID: {args.child}\nParent page ID: {args.parent}")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Would make page {args.child} a sub-item of {args.parent}")
         return 0
 
-    # Initialize hierarchy manager
     hierarchy = NotionPageHierarchy(api_key=Config.NOTION_API_KEY)
-
-    # Make sub-item
-    result = hierarchy.make_subitem(
-        child_page_id=args.child,
-        parent_page_id=args.parent,
-        verify=not args.no_verify
-    )
+    result = hierarchy.make_subitem(child_page_id=args.child, parent_page_id=args.parent, verify=not args.no_verify)
 
     if result['success']:
-        print(f"\n✅ Successfully made '{result['child_title']}' a sub-item of '{result['parent_title']}'")
-        print(f"Database: {result['database_id']}")
-        print(f"Parent property ID: {result['parent_property_id']}")
+        print(f"\n✅ Successfully made '{result['child_title']}' a sub-item of '{result['parent_title']}'\n"
+              f"Database: {result['database_id']}\nParent property ID: {result['parent_property_id']}")
         return 0
-
     print(f"\n❌ Error: {result['error']}")
     return 1
 
@@ -667,46 +464,32 @@ def cmd_organize_categories(args):
     from post_processing.category_organizer import build_categories_from_csv
 
     print_separator("Organize Categories in Notion Database")
-
     try:
         Config.validate_notion()
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
         return 1
 
-    # Check CSV file exists
     csv_path = Path(args.csv)
     if not csv_path.exists():
         logger.error(f"CSV file not found: {args.csv}")
         return 1
 
-    # Get database ID (from args or config)
     database_id = args.database_id or Config.NOTION_DATABASE_ID
     if not database_id:
         logger.error("Database ID is required (use --database-id or set NOTION_DATABASE_ID in .env)")
         return 1
 
-    logger.info(f"CSV file: {args.csv}")
-    logger.info(f"Database ID: {database_id}")
-    logger.info(f"Dry run: {args.dry_run}")
-
+    logger.info(f"CSV file: {args.csv}\nDatabase ID: {database_id}\nDry run: {args.dry_run}")
     if args.dry_run:
         print("\n[DRY RUN] Previewing category organization...")
 
-    # Build category hierarchy
-    result = build_categories_from_csv(
-        api_key=Config.NOTION_API_KEY,
-        database_id=database_id,
-        csv_path=str(csv_path),
-        dry_run=args.dry_run
-    )
+    result = build_categories_from_csv(api_key=Config.NOTION_API_KEY, database_id=database_id,
+                                      csv_path=str(csv_path), dry_run=args.dry_run)
 
-    # Display results
     print_separator("Results", "-")
-    print(f"Success: {'✅ Yes' if result['success'] else '❌ No'}")
-    print(f"Categories created: {result['categories_created']}")
-    print(f"Relationships created: {result['relationships_created']}")
-    print(f"Errors: {len(result['errors'])}")
+    print(f"Success: {'✅ Yes' if result['success'] else '❌ No'}\nCategories created: {result['categories_created']}\n"
+          f"Relationships created: {result['relationships_created']}\nErrors: {len(result['errors'])}")
 
     if result['errors']:
         print("\nErrors encountered:")
@@ -715,24 +498,15 @@ def cmd_organize_categories(args):
         if len(result['errors']) > 10:
             print(f"  ... and {len(result['errors']) - 10} more errors")
 
-    # Export category mapping if requested
     if args.export_mapping and result['category_pages'] and not args.dry_run:
         from post_processing.category_organizer import CategoryOrganizer
-
-        mapping_path = args.export_mapping
-        logger.info(f"Exporting category mapping to {mapping_path}")
-
-        organizer = CategoryOrganizer(
-            api_key=Config.NOTION_API_KEY,
-            database_id=database_id
-        )
+        logger.info(f"Exporting category mapping to {args.export_mapping}")
+        organizer = CategoryOrganizer(api_key=Config.NOTION_API_KEY, database_id=database_id)
         organizer.category_pages = result['category_pages']
-        organizer.export_category_mapping(mapping_path)
-
-        print(f"\n✅ Category mapping exported to: {mapping_path}")
+        organizer.export_category_mapping(args.export_mapping)
+        print(f"\n✅ Category mapping exported to: {args.export_mapping}")
 
     print("=" * 80)
-
     return 0 if result['success'] else 1
 
 
@@ -743,7 +517,6 @@ def cmd_export_categories(args):
     from pre_processing.category_hierarchy import CategoryHierarchyBuilder
 
     print_separator("Export Category Hierarchy")
-
     try:
         sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
@@ -751,57 +524,38 @@ def cmd_export_categories(args):
         return 1
 
     with sn_client:
-
-        # Get all articles with display values for human-readable category names
         logger.info("Fetching articles from ServiceNow...")
         articles = kb.get_latest_articles_only(display_value='all')
         logger.info(f"Found {len(articles)} articles")
 
-        # Build hierarchy
         logger.info("Building category hierarchy...")
         builder = CategoryHierarchyBuilder()
         hierarchy = builder.build_hierarchy_from_articles(articles)
         logger.info(f"Found {len(hierarchy)} top-level categories")
 
         if args.dry_run:
-            print("\n[DRY RUN] Would export category hierarchy:")
-            print(f"  - Top-level categories: {len(hierarchy)}")
-            print(f"  - Output format: {args.format}")
-            print(f"  - Output path: {args.output or 'category_hierarchy.' + args.format}")
+            print(f"\n[DRY RUN] Would export category hierarchy:\n  - Top-level categories: {len(hierarchy)}\n"
+                  f"  - Output format: {args.format}\n  - Output path: {args.output or 'category_hierarchy.' + args.format}")
             return 0
 
-        # Determine output path
-        if args.output:
-            output_path = Path(args.output)
-        else:
-            output_path = Path(f"category_hierarchy.{args.format}")
+        output_path = Path(args.output) if args.output else Path(f"category_hierarchy.{args.format}")
 
-        # Export based on format
         if args.format == 'json':
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(hierarchy, f, indent=2, ensure_ascii=False)
             logger.info(f"✅ Exported hierarchy to JSON: {output_path}")
-
         elif args.format == 'csv':
             rows = flatten_hierarchy(hierarchy)
-            fieldnames = ['name', 'full_path', 'parent', 'ancestors', 'level',
-                          'article_count', 'total_article_count']
-
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=['name', 'full_path', 'parent', 'ancestors', 'level',
+                                                       'article_count', 'total_article_count'])
                 writer.writeheader()
                 writer.writerows(rows)
-
             logger.info(f"✅ Exported hierarchy to CSV: {output_path}")
 
-        # Show summary
         print_separator("Export Summary", "-")
-        print(f"Total articles: {len(articles)}")
-        print(f"Top-level categories: {len(hierarchy)}")
-        print(f"Output file: {output_path}")
-        print(f"Format: {args.format.upper()}")
-        print()
-
+        print(f"Total articles: {len(articles)}\nTop-level categories: {len(hierarchy)}\n"
+              f"Output file: {output_path}\nFormat: {args.format.upper()}\n")
         return 0
 
 
@@ -810,7 +564,6 @@ def cmd_visualize(args):
     from pre_processing.category_hierarchy import CategoryHierarchyBuilder
 
     print_separator("Visualize Category Hierarchy")
-
     try:
         sn_client, kb = init_servicenow_client()
     except ConfigurationError as e:
@@ -818,16 +571,11 @@ def cmd_visualize(args):
         return 1
 
     with sn_client:
-
-        # Get all articles
         logger.info("Fetching articles from ServiceNow...")
         articles = kb.get_latest_articles_only()
-
-        # Build hierarchy
         builder = CategoryHierarchyBuilder()
         hierarchy = builder.build_hierarchy_from_articles(articles)
 
-        # Visualize
         def print_tree(nodes, indent=0):
             for node in nodes:
                 print("  " * indent + f"├─ {node['label']} ({node.get('count', 0)} articles)")
@@ -836,7 +584,6 @@ def cmd_visualize(args):
 
         print(f"\nFound {len(hierarchy)} top-level categories:")
         print_tree(hierarchy)
-
         return 0
 
 
