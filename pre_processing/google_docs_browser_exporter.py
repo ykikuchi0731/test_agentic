@@ -12,12 +12,10 @@ from dotenv import load_dotenv
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
@@ -46,6 +44,28 @@ class DownloadManager:
             except Exception as e:
                 logger.error(f"Failed to navigate to download URL: {e}")
                 return None
+
+            # Check for HTTP error pages (403, 404, etc.) immediately after page load
+            # This prevents waiting the full timeout for permission/access errors
+            time.sleep(0.5)  # Brief wait for page to render
+            try:
+                page_title = driver.title.lower()
+                page_source = driver.page_source.lower()
+
+                # Detect Google error pages
+                error_indicators = [
+                    ('403', 'forbidden', 'permission'),
+                    ('404', 'not found'),
+                    ('error', 'sorry'),
+                    ('access denied', 'no access')
+                ]
+
+                for indicators in error_indicators:
+                    if any(ind in page_title or ind in page_source[:2000] for ind in indicators):
+                        logger.error(f"HTTP error detected for {file_id}: Page title/content indicates error ({indicators[0]})")
+                        return None
+            except Exception as e:
+                logger.debug(f"Could not check for error page: {e}")
 
             start_time = time.time()
             while time.time() - start_time < timeout:
