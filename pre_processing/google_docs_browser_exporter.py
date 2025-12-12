@@ -8,6 +8,7 @@ import json
 import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from dotenv import load_dotenv
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -20,6 +21,9 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +157,8 @@ class GoogleDocsBrowserExporter:
         download_dir: str = "./google_docs_exports",
         browser_type: str = "chrome",
         headless: bool = False,
-        timeout: int = 30,
+        timeout: int = None,
+        download_timeout: int = None,
     ):
         """
         Initialize Google Docs browser exporter.
@@ -162,14 +167,18 @@ class GoogleDocsBrowserExporter:
             download_dir: Directory to save exported DOCX files
             browser_type: Browser to use ('chrome', 'firefox', 'edge')
             headless: Run browser in headless mode (no GUI)
-            timeout: Timeout in seconds for browser operations
+            timeout: Timeout for browser operations (page load, element wait).
+                     If None, reads from GOOGLE_DOCS_BROWSER_TIMEOUT env var (default: 60)
+            download_timeout: Timeout for file download completion.
+                             If None, reads from GOOGLE_DOCS_DOWNLOAD_TIMEOUT env var (default: 120)
 
         Example:
             exporter = GoogleDocsBrowserExporter(
                 download_dir='./exports',
                 browser_type='chrome',
                 headless=True,
-                timeout=30
+                timeout=60,
+                download_timeout=120
             )
         """
         self.download_dir = Path(download_dir).resolve()
@@ -177,7 +186,10 @@ class GoogleDocsBrowserExporter:
 
         self.browser_type = browser_type.lower()
         self.headless = headless
-        self.timeout = timeout
+
+        # Read timeout from environment variables if not provided
+        self.timeout = timeout if timeout is not None else int(os.getenv('GOOGLE_DOCS_BROWSER_TIMEOUT', '60'))
+        self.download_timeout = download_timeout if download_timeout is not None else int(os.getenv('GOOGLE_DOCS_DOWNLOAD_TIMEOUT', '120'))
 
         self.driver: Optional[webdriver.Remote] = None
         self.is_logged_in = False
@@ -189,6 +201,7 @@ class GoogleDocsBrowserExporter:
             f"Google Docs browser exporter initialized with output dir: {download_dir}"
         )
         logger.info(f"Browser: {browser_type}, Headless: {headless}")
+        logger.info(f"Timeouts - Browser: {self.timeout}s, Download: {self.download_timeout}s")
 
     def _setup_browser(self) -> webdriver.Remote:
         """Setup and configure browser with download preferences."""
@@ -524,7 +537,7 @@ class GoogleDocsBrowserExporter:
                 file_id=file_id,
                 doc_title=doc_title,
                 download_url=download_url,
-                timeout=self.timeout
+                timeout=self.download_timeout  # Use download_timeout (longer) for file downloads
             )
 
             if not download_result:
