@@ -450,7 +450,7 @@ def cmd_scan_empty_wrappers(args):
 
 
 def cmd_gdoc_mapping(args):
-    """Extract Google Docs mapping from migration log."""
+    """Extract Google Docs mapping from migration log and tracking files."""
     from pre_processing.gdoc_article_mapping import main as gdoc_mapping_main
     from datetime import datetime
 
@@ -463,6 +463,7 @@ def cmd_gdoc_mapping(args):
     )
 
     log_file = Path(args.log_file)
+    download_dir = getattr(args, 'download_dir', 'download')
 
     if not log_file.exists():
         logger.error(f"Log file not found: {log_file}")
@@ -470,12 +471,14 @@ def cmd_gdoc_mapping(args):
         return 1
 
     logger.info(f"Log file: {log_file}")
+    logger.info(f"Download directory: {download_dir}")
     logger.info(f"Output: {args.output if args.output else 'auto-generated'}")
 
     try:
         result = gdoc_mapping_main(
             log_file=str(log_file),
-            output_file=args.output
+            output_file=args.output,
+            download_dir=download_dir
         )
 
         print("\n" + "=" * 80)
@@ -486,6 +489,8 @@ def cmd_gdoc_mapping(args):
         print("=" * 80)
         print(f"Total mappings:   {result['count']}")
         if result['success']:
+            print(f"  From tracking:  {result.get('tracking_file_count', 0)} (deterministic)")
+            print(f"  From log:       {result.get('log_only_count', 0)} (failed downloads)")
             print(f"  Success:        {result['success_count']}")
             print(f"  Failed:         {result['failed_count']}")
             print(f"\n📄 CSV saved to: {result['csv_path']}")
@@ -1017,14 +1022,19 @@ def main():
     # =================================================================
     gdoc_parser = subparsers.add_parser(
         'gdoc-mapping',
-        help='Extract Google Docs mapping from migration log',
-        description='Parse migration log to create CSV mapping of Google Docs to articles'
+        help='Extract Google Docs mapping from migration log and tracking files',
+        description='Parse migration log and tracking files to create CSV mapping of Google Docs to articles'
     )
     CommonCLI.add_common_args(gdoc_parser)
     gdoc_parser.add_argument(
         'log_file',
         metavar='LOG_FILE',
         help='Path to migration log file (e.g., logs/migration_20251210_103001.log)'
+    )
+    gdoc_parser.add_argument(
+        '--download-dir',
+        default='download',
+        help='Directory containing downloaded files and tracking files (default: download)'
     )
     gdoc_parser.set_defaults(func=cmd_gdoc_mapping)
 

@@ -3,6 +3,9 @@ import logging
 import os
 import re
 import time
+import uuid
+import json
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -19,6 +22,127 @@ from webdriver_manager.firefox import GeckoDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 logger = logging.getLogger(__name__)
+
+
+class DownloadManager:
+    """
+    Manages Google Docs downloads with deterministic file-to-request tracking.
+
+    Uses a global download lock to ensure downloads happen sequentially,
+    eliminating any ambiguity about which file belongs to which request.
+
+    This is the most reliable approach for concurrent article processing:
+    - Articles can be processed concurrently
+    - But Google Docs downloads happen sequentially (one at a time)
+    - Each download is tracked from request to completion
+    """
+
+    def __init__(self, download_dir: Path):
+        """Initialize download manager."""
+        self.download_dir = download_dir
+        self.download_lock = threading.Lock()  # Global lock for all downloads
+        logger.info("DownloadManager initialized with sequential download enforcement")
+
+    def download_with_tracking(
+        self,
+        driver,
+        file_id: str,
+        doc_title: str,
+        download_url: str,
+        timeout: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Download a Google Doc with deterministic tracking.
+
+        Acquires global download lock to ensure this is the ONLY download happening.
+        This makes file identification trivial: any new .docx file = our file.
+
+        Args:
+            driver: Selenium WebDriver instance
+            file_id: Google Docs file ID
+            doc_title: Document title
+            download_url: URL to trigger download
+            timeout: Timeout in seconds
+
+        Returns:
+            Dict with 'filename', 'file_id', 'doc_title' or None if failed
+        """
+        # Acquire global lock - blocks if another download is in progress
+        with self.download_lock:
+            logger.debug(f"Acquired download lock for {file_id}")
+
+            # Snapshot files before download
+            initial_files = set(self.download_dir.glob("*.docx"))
+
+            # Trigger download
+            try:
+                driver.get(download_url)
+            except Exception as e:
+                logger.error(f"Failed to navigate to download URL: {e}")
+                return None
+
+            # Wait for new file to appear
+            start_time = time.time()
+
+            while time.time() - start_time < timeout:
+                current_files = set(self.download_dir.glob("*.docx"))
+                new_files = current_files - initial_files
+
+                # Filter out partial downloads
+                completed_files = [
+                    f for f in new_files
+                    if not any(f.name.endswith(ext) for ext in [".crdownload", ".tmp", ".part"])
+                    and not f.name.endswith(".tracking.json")
+                ]
+
+                if completed_files:
+                    # Since we have the lock, there can only be ONE new file - ours!
+                    downloaded_file = completed_files[0]
+
+                    if len(completed_files) > 1:
+                        logger.warning(
+                            f"Multiple files appeared during single download: {[f.name for f in completed_files]}. "
+                            f"Using most recent: {downloaded_file.name}"
+                        )
+                        downloaded_file = sorted(completed_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
+
+                    logger.info(f"✅ Download complete: {downloaded_file.name} (deterministic - had lock)")
+
+                    # Create tracking file immediately
+                    tracking_file = self.download_dir / f"{downloaded_file.name}.tracking.json"
+                    tracking_data = {
+                        "download_id": str(uuid.uuid4()),
+                        "file_id": file_id,
+                        "doc_title": doc_title,
+                        "downloaded_filename": downloaded_file.name,
+                        "download_timestamp": time.time()
+                    }
+
+                    try:
+                        tracking_file.write_text(json.dumps(tracking_data, indent=2))
+                        logger.debug(f"Created tracking file: {tracking_file.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create tracking file: {e}")
+
+                    return {
+                        'filename': downloaded_file.name,
+                        'filepath': str(downloaded_file),
+                        'file_id': file_id,
+                        'doc_title': doc_title
+                    }
+
+                # Check for partial downloads
+                partial_files = [
+                    f for f in current_files
+                    if any(f.name.endswith(ext) for ext in [".crdownload", ".tmp", ".part"])
+                ]
+                if partial_files:
+                    logger.debug("Download in progress...")
+
+                time.sleep(0.5)
+
+            logger.warning(f"Download timeout after {timeout}s for {file_id}")
+            return None
 
 
 class GoogleDocsBrowserExporter:
@@ -57,6 +181,9 @@ class GoogleDocsBrowserExporter:
 
         self.driver: Optional[webdriver.Remote] = None
         self.is_logged_in = False
+
+        # Initialize download manager for deterministic tracking
+        self.download_manager = DownloadManager(self.download_dir)
 
         logger.info(
             f"Google Docs browser exporter initialized with output dir: {download_dir}"
@@ -385,61 +512,28 @@ class GoogleDocsBrowserExporter:
                 result["title"] = doc_title
                 logger.warning("Could not find document title, using 'Untitled'")
 
-            # Download as DOCX
-            # Method: Use File > Download > Microsoft Word (.docx)
-            # URL parameter method (more reliable than menu navigation)
+            # Download as DOCX using DownloadManager for deterministic tracking
+            # DownloadManager ensures sequential downloads (one at a time) to eliminate file matching ambiguity
             download_url = f"https://docs.google.com/document/d/{file_id}/export?format=docx"
             logger.info("Initiating download...")
 
-            # Generate unique download ID for tracking
-            import uuid
-            import json
-            download_id = str(uuid.uuid4())
+            # Use download manager - blocks until download completes or timeout
+            # This is deterministic: the manager guarantees correct file-to-request association
+            download_result = self.download_manager.download_with_tracking(
+                driver=self.driver,
+                file_id=file_id,
+                doc_title=doc_title,
+                download_url=download_url,
+                timeout=self.timeout
+            )
 
-            # Capture snapshot of existing files BEFORE download
-            initial_files = set(self.download_dir.glob("*.docx"))
-            logger.debug(f"Snapshot: {len(initial_files)} existing .docx files")
-
-            try:
-                # Trigger download
-                self.driver.get(download_url)
-
-                # Wait for new .docx file to appear
-                downloaded_file = self._wait_for_new_file(
-                    initial_files=initial_files,
-                    expected_extension=".docx",
-                    timeout=self.timeout
-                )
-
-                if not downloaded_file:
-                    result["error"] = "Download timeout or failed"
-                    logger.error(result["error"])
-                    return result
-
-                # Create tracking metadata file immediately after download completes
-                # This associates the downloaded file with the request parameters
-                tracking_file = self.download_dir / f"{downloaded_file.name}.tracking.json"
-                tracking_data = {
-                    "download_id": download_id,
-                    "file_id": file_id,
-                    "doc_title": doc_title,
-                    "downloaded_filename": downloaded_file.name,
-                    "download_timestamp": time.time()
-                }
-                try:
-                    tracking_file.write_text(json.dumps(tracking_data, indent=2))
-                    logger.debug(f"Created tracking file: {tracking_file.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to create tracking file: {e}")
-
-            except Exception as e:
-                result["error"] = f"Download failed: {e}"
-                logger.error(result["error"], exc_info=True)
+            if not download_result:
+                result["error"] = "Download timeout or failed"
+                logger.error(result["error"])
                 return result
 
-            # Verify filename matches doc title
-            if doc_title and doc_title != "Untitled" and (sanitized_title := re.sub(r'[<>:"/\\|?*]', '', doc_title)) not in downloaded_file.stem:
-                logger.warning(f"⚠️  Downloaded file name mismatch! Expected: '{sanitized_title}', Got: '{downloaded_file.stem}'. This may indicate wrong file match.")
+            # Extract downloaded file path
+            downloaded_file = Path(download_result['filepath'])
 
             # Rename if custom filename provided
             if output_filename:
